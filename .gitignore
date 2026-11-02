@@ -1,0 +1,28 @@
+# Python / build
+.venv/
+__pycache__/
+*.pyc
+build/
+build_out/
+dist/
+*.spec
+
+# the built app and share zips (publish these as GitHub Releases instead)
+*.exe
+share/
+ffmpeg.exe
+
+# sounds are other people's clips (Instagram/YouTube); don't redistribute them
+sounds/
+
+# personal settings and logs
+config.json
+*.log
+
+# original icon artwork (icon.ico/icon.png are kept: the build needs them)
+icon_art*.webp
+icon_old.*
+
+# misc
+Soundboard.bat
+reels.txt
