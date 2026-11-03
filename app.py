@@ -1498,6 +1498,9 @@ class Dragger:
         """tile was pressed at (grab_x, grab_y) inside it and the pointer has moved to x, y."""
         app = self.app
         app.close_menus()
+        if app.page is not None and app.page._slide is not None:
+            app.page.stop_slide()
+            app.page.layout(app.page.columns, app.page.query or "")
         self.tile, self.grab = tile, (grab_x, grab_y)
         tile._set_hover(False)
         tile.set_dragging(True)
@@ -1553,10 +1556,15 @@ class Dragger:
         if slot is not None:
             index, visible = slot
             name = tile.name
+            moved = True
             if index < len(visible) and visible[index] != name and (index == 0 or visible[index - 1] != name):
-                app.set_order(move_in_order(app.cfg["order"], name, visible[index]))
+                app.set_order(move_in_order(app.cfg["order"], name, visible[index]), dropped=name)
             elif index == len(visible) and visible and visible[-1] != name:
-                app.set_order(move_in_order(app.cfg["order"], name, visible[-1], after=True))
+                app.set_order(move_in_order(app.cfg["order"], name, visible[-1], after=True), dropped=name)
+            else:
+                moved = False
+            self._land(tile.name, moved)
+            return
         self._land(tile.name)
 
     def cancel(self):
@@ -1575,33 +1583,31 @@ class Dragger:
             self._scroll_job = None
         self.tile = None   # (the tile stays faint until its copy has landed on it: _land)
 
-    def _land(self, name):
-        """Glide the lifted copy into the tile's (new) spot, then let the tile take over."""
+    def _land(self, name, moved=False):
+        """The sound is in its (new) spot: it comes back at once (lighting up if it moved) while the
+        lifted copy fades out, drifting toward it, the same way a drop onto a group tab ends.
+        (Flying the smaller copy onto the tile never lined up, and reading the new layout first
+        painted the board in its new order before anything moved.)"""
         app, g = self.app, self.ghost
-        tile = app.page.tiles.get(name) if app.page else None
+        page = app.page
+        tile = page.tiles.get(name) if page else None
         for t in app.all_tiles():   # every copy of it (All and its group page) comes back
-            if t.name == name and t is not tile:
+            if t.name == name:
                 t.set_dragging(False)
-        if tile is None or not tile.winfo_exists() or not tile.winfo_ismapped():
+        # (winfo_manager, not winfo_ismapped: a tile just placed for its slide maps only at idle)
+        if tile is None or not tile.winfo_exists() or not tile.winfo_manager():
             fade_away(g, done=g.withdraw)
-            if tile is not None:
-                tile.set_dragging(False)
             return
-        app.root.update_idletasks()   # the board has its new layout
-        x0, y0 = win_pos(g)
-        x1, y1 = tile.winfo_rootx(), tile.winfo_rooty()
-        token = g.motion = object()
-
-        def step(e):
-            if g.motion is not token:
-                return False
-            g.geometry(f"+{round(x0 + (x1 - x0) * e)}+{round(y0 + (y1 - y0) * e)}")
-
-        def done():
-            if g.motion is token:
-                tile.set_dragging(False)   # comes back under the copy...
-                fade_away(g, ms=MOTION_HOVER, done=g.withdraw)   # ...which then melts away
-        animate(g, MOTION_OPEN, step, done=done)
+        if moved:
+            tile.flash()
+        # where the tile is headed, without asking Tk for the new layout (that would draw it)
+        tx, ty = page.targets.get(name) or (tile.winfo_x(), tile.winfo_y())
+        cx = page.frame.winfo_rootx() + tx + tile.winfo_width() // 2
+        cy = page.frame.winfo_rooty() + ty + tile.winfo_height() // 2
+        gx, gy = win_pos(g)
+        dx = (cx - (gx + g.winfo_width() // 2)) // 3
+        dy = (cy - (gy + g.winfo_height() // 2)) // 3
+        fade_away(g, dx, dy, MOTION_OPEN, done=g.withdraw)
 
     # --- where it would land ---
     def _tab_at(self, x, y):
@@ -1749,7 +1755,70 @@ class Page:
         self.tiles = {n: self.tiles[n] for n in self.app.clips if n in self.tiles}
         self.dirty = True
 
+    # --- sliding into a new order ---
+    _slide = None      # the running slide (a token), if any
+    targets = {}       # where each sliding tile is headed: name -> (x, y) in the scroll area
+
+    def cells(self):
+        """{name: (x, y)} of the tiles on screen now, in the page's scroll area."""
+        return {n: (self.tiles[n].winfo_x(), self.tiles[n].winfo_y())
+                for n in self.placed if not isinstance(n, tuple) and n in self.tiles}
+
+    def slide(self, before, dropped=None, ms=220):
+        """The tiles are in their new order (and gridded there, not drawn yet). Take the ones you can
+        see out of the grid, put them back where they were, and glide each to its new cell; then
+        hand them back to the grid. Cells are the same size, so a tile's new cell is wherever the
+        tile that used to be at that index was. Grid geometry is never computed in between, so
+        nothing shows the new layout before the slide starts."""
+        shown = [n for n in self.tiles if n in before]
+        cells = [before[n] for n in sorted(before, key=lambda n: (before[n][1], before[n][0]))]
+        if len(cells) != len(shown):
+            return
+        moves, self.targets = [], {}
+        for n, (x1, y1) in zip(shown, cells):
+            self.targets[n] = (x1, y1)
+            x0, y0 = (x1, y1) if n == dropped else before[n]   # the dropped one lands straight away
+            # every tile you can see leaves the grid, even ones that stay put: a grid row left
+            # empty collapses, and the rows below it would jump up for the length of the slide
+            moves.append((self.tiles[n], x0, y0, x1, y1))
+        if not any((x0, y0) != (x1, y1) for _, x0, y0, x1, y1 in moves):
+            return
+        frame = self.frame
+        # hold the scroll area's size while tiles are out of the grid (else it shrinks and jumps)
+        tk.Frame.configure(frame, height=frame.winfo_height())
+        tk.Misc.grid_propagate(frame, False)
+        for t, x0, y0, *_ in moves:
+            tk.Canvas.place(t, x=x0, y=y0, width=t.winfo_width(), height=t.winfo_height())
+        token = self._slide = object()
+
+        def step(e):
+            if self._slide is not token:
+                return False
+            for t, x0, y0, x1, y1 in moves:
+                if (x0, y0) != (x1, y1):
+                    t.place_configure(x=round(x0 + (x1 - x0) * e), y=round(y0 + (y1 - y0) * e))
+
+        def done():
+            if self._slide is token:
+                self.stop_slide()
+                self.layout(self.columns, self.query or "")
+        animate(frame, ms, step, done=done)
+
+    def stop_slide(self):
+        """End a slide where it's headed: tiles back into the grid (at their new cells)."""
+        self.targets = {}
+        if self._slide is None:
+            return
+        self._slide = None
+        for t in self.tiles.values():
+            if t.winfo_manager() == "place":
+                t.place_forget()
+        self.placed = {k: v for k, v in self.placed.items() if isinstance(k, tuple)}   # regrid the tiles
+        self.dirty = True
+        tk.Misc.grid_propagate(self.frame, True)
+
     def layout(self, cols, query=""):
+        self.stop_slide()
         if not self.dirty and cols == self.columns and query == self.query:
             return
         self.dirty = False
@@ -2591,7 +2660,9 @@ class App:
         self.save_config()
         self._build_group_bar()
         for t in self.all_tiles():
-            t._paint()
+            if group_of(t.name) == group:   # placeholder picture, dot and playing colour
+                t.refresh()
+                t._paint()
 
     def close_menus(self):
         for m in list(self.open_menus):
@@ -2701,17 +2772,26 @@ class App:
         if announce:
             self.toast(f"Moved '{Path(name).stem}' to {group or 'No group'}")
 
-    def set_order(self, order):
-        """Show the board in this order (from a drag) and remember it."""
+    def set_order(self, order, dropped=None):
+        """Show the board in this order and remember it. The tiles you can see slide to their new
+        spots; dropped (the sound you just let go of) goes straight to its new one instead."""
         self.cfg["order"] = [n for n in order if n in self.clips]
         self.clips = {n: self.clips[n] for n in self.cfg["order"]}
         self.save_config()
+        page = self.page
+        # still sliding from the last drop: tiles aren't where the grid says, so this one just snaps
+        sliding = page is not None and page._slide is not None
+        if page is not None:
+            page.stop_slide()
+        before = page.cells() if page is not None and not sliding else {}
         # only the order changed: move tiles in the grid, don't re-render them (a full sync of every
         # page plus a whole-window repaint held the drop up ~200 ms before its copy could glide in)
         for p in self.pages.values():
             if p.built:
                 p.reorder()
         self._show_page()   # the page you see now; the others catch up when shown
+        if page is not None and page is self.page and before:
+            page.slide(before, dropped)
 
     def sort_az(self):
         self.set_order(sorted(self.clips, key=lambda n: Path(n).stem.lower()))
