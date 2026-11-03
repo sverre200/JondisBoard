@@ -1,29 +1,26 @@
-﻿"""Turn round artwork on a white background into icon.png / icon.ico with a see-through outside.
+﻿"""Write icon.ico / icon.png (the Toxic Green logo) for the exe and a preview of every theme.
 
-    python make_icon.py ART.webp OUT_DIR [left top right bottom]
+    python make_icon.py
 
-The optional box is the circle's edge in the artwork (measured, default for icon_art.webp)."""
-import sys
+The running app draws its own icon in the chosen theme (see logo.py); these files are only what
+Explorer and the desktop shortcut show, which can't change with the theme."""
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
-src, out = Path(sys.argv[1]), Path(sys.argv[2])
-box = tuple(int(v) for v in sys.argv[3:7]) if len(sys.argv) >= 7 else (0, -1, 1240, 1239)
-im = Image.open(src).convert("RGBA").crop(box)
-n = im.width
-inset, big = 3, 4   # shave the white fringe; supersample the mask for a smooth edge
-mask = Image.new("L", (n * big, n * big), 0)
-ImageDraw.Draw(mask).ellipse((inset * big, inset * big, (n - inset) * big - 1, (n - inset) * big - 1), fill=255)
-im.putalpha(mask.resize((n, n), Image.LANCZOS))
+import logo
+from app import THEMES
 
-icon = im.resize((256, 256), Image.LANCZOS)
-icon.save(out / "icon.png")
-icon.save(out / "icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
-preview = Image.new("RGBA", (420, 280), (15, 15, 20, 255))
-x = 10
-for size in (256, 64, 32, 16):
-    preview.alpha_composite(im.resize((size, size), Image.LANCZOS), (x, 10))
-    x += size + 12
-preview.save(out / "icon_preview.png")
+here = Path(__file__).resolve().parent
+green = THEMES["Toxic Green"]
+logo.save_ico(here / "icon.ico", logo.tile_color(green), green["ACCENT"])
+logo.draw(256, logo.tile_color(green), green["ACCENT"]).save(here / "icon.png")
 
+preview = Image.new("RGBA", (90 + 300 * len(THEMES) // 2, 330), (20, 20, 24, 255))
+for k, (name, t) in enumerate(THEMES.items()):
+    x, y = 12 + (k % 3) * 300, 12 + (k // 3) * 160
+    for size in (128, 48, 32, 24, 16):
+        preview.alpha_composite(logo.draw(size, logo.tile_color(t), t["ACCENT"]), (x, y + 128 - size))
+        x += size + 10
+preview.save(here / "icon_preview.png")
+print("wrote icon.ico, icon.png, icon_preview.png")
