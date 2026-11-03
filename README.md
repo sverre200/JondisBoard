@@ -35,7 +35,10 @@ Don't point Windows' default *output* at CABLE Input, or everything on your PC g
 
 ## Using it
 
-- **Click** a button to play its clip. Clicking it again restarts it.
+- **Click** a button to play its clip. Clicking it again restarts it (or stops it, see **Settings** below).
+- **Settings** (top right) has your audio devices and two playback switches, both off to start with:
+  - **One sound at a time**: starting a sound stops the others.
+  - **Press a playing sound to stop it**: a second click or hotkey press stops the sound instead of starting it over.
 - **Right-click** a button to set a hotkey, rename it or delete it. Hotkeys work while you're in a game. Numpad keys are separate from the normal number keys, so Numpad 1–9 make good hotkeys.
 - **Set stop key** gives "Stop all" a hotkey.
 - Volume sliders: **Mic** is your voice, **Clips** is how loud clips are for other people, **In your ears** is what you hear.

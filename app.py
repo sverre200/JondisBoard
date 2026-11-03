@@ -11,12 +11,12 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
 from tkinter import filedialog
 
 import customtkinter as ctk
-from customtkinter.windows.widgets.core_rendering import DrawEngine
 from PIL import Image, ImageDraw, ImageGrab, ImageOps, ImageTk
 
 import engine
@@ -47,6 +47,8 @@ DEFAULTS = {
     "group": ALL,              # group shown last time
     "group_colors": {},        # group -> "#rrggbb"
     "order": [],               # clip names in the order you dragged them into (new ones go last)
+    "solo": False,             # one sound at a time: starting one stops the others
+    "toggle_stop": False,      # pressing a sound that's playing stops it (instead of restarting it)
     "cookies_from_browser": None,
     "theme": "Toxic Green",
     "geometry": None,          # window size/position last time
@@ -955,6 +957,32 @@ def pointer_inside(widget, e=None):
     return under is not None and str(under).startswith(str(widget))
 
 
+class _BMI(ctypes.Structure):
+    _fields_ = [("size", ctypes.c_uint32), ("w", ctypes.c_int32), ("h", ctypes.c_int32), ("planes", ctypes.c_uint16),
+                ("bits", ctypes.c_uint16), ("comp", ctypes.c_uint32), ("rest", ctypes.c_uint32 * 5)]
+
+
+def screen_grab(x, y, w, h):
+    """A copy of what's on screen in that rectangle (a straight screen copy: ~15 ms for the board,
+    where PIL's ImageGrab takes ~70 ms and PrintWindow ~35 ms)."""
+    user32, gdi32 = ctypes.windll.user32, ctypes.windll.gdi32
+    sdc = user32.GetDC(0)
+    mdc = gdi32.CreateCompatibleDC(sdc)
+    bmp = gdi32.CreateCompatibleBitmap(sdc, w, h)
+    old = gdi32.SelectObject(mdc, bmp)
+    try:
+        gdi32.BitBlt(mdc, 0, 0, w, h, sdc, x, y, 0x00CC0020)   # SRCCOPY
+        bmi = _BMI(ctypes.sizeof(_BMI), w, -h, 1, 32, 0)
+        buf = ctypes.create_string_buffer(w * h * 4)
+        gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bmi), 0)
+        return Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+    finally:
+        gdi32.SelectObject(mdc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mdc)
+        user32.ReleaseDC(0, sdc)
+
+
 def _tile_grid(tile):
     """The layout every tile shares: picture | two-line title over (duration, group, hotkey) | bar."""
     tile.grid_propagate(False)
@@ -991,6 +1019,39 @@ def pill_pil(w, h, color, radius=None):
     return im.resize((w, h), Image.LANCZOS)
 
 
+_card_masks = {}
+_card_photos = OrderedDict()   # (w, h, fill, border, scale) -> PhotoImage, most recent last
+
+
+def card_photo(w, h, fill, border, scale):
+    """A tile's rounded card (fill + 1 px outline, anti-aliased) as ONE canvas image. customtkinter
+    draws rounded corners from ~20 font glyphs, and those made every repaint of a tile about twice as
+    expensive, which a slide of many tiles felt. The masks are made once per size; a colour pair is
+    two pastes, so hover fades stay cheap. Kept to the last few hundred colour pairs."""
+    key = (w, h, fill, border, scale)
+    photo_ = _card_photos.get(key)
+    if photo_ is not None:
+        _card_photos.move_to_end(key)
+        return photo_
+    mk = (w, h, scale)
+    if mk not in _card_masks:
+        k, r, b = 3, 14 * scale, max(1, round(scale))
+        outer = Image.new("L", (w * k, h * k), 0)
+        ImageDraw.Draw(outer).rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=r * k, fill=255)
+        inner = Image.new("L", (w * k, h * k), 0)
+        ImageDraw.Draw(inner).rounded_rectangle((b * k, b * k, (w - b) * k - 1, (h - b) * k - 1),
+                                                radius=max(0, r - b) * k, fill=255)
+        _card_masks[mk] = (outer.resize((w, h), Image.LANCZOS), inner.resize((w, h), Image.LANCZOS))
+    outer, inner = _card_masks[mk]
+    im = Image.new("RGBA", (w, h), border)
+    im.putalpha(outer)
+    im.paste(Image.new("RGBA", (w, h), fill), (0, 0), inner)
+    photo_ = _card_photos[key] = ImageTk.PhotoImage(im)
+    if len(_card_photos) > 400:
+        _card_photos.popitem(last=False)
+    return photo_
+
+
 class Tile(ctk.CTkCanvas):
     """One sound pad: click to play, right-click (or the ⋯ that shows on hover) for options.
 
@@ -1010,7 +1071,7 @@ class Tile(ctk.CTkCanvas):
         self.art_frame = None          # which equalizer frame the picture shows while playing
         self.progress = 0.0
         self.w = 0
-        self.draw = DrawEngine(self)
+        self.card = self.create_image(0, 0, anchor="nw")   # the rounded card, drawn as one image (card_photo)
         self.f_title, self.f_meta, self.f_chip = tk_font(13, "bold", s), tk_font(12, "normal", s), tk_font(11, "bold", s)
         p = lambda v: round(v * s)   # noqa: E731
         self.pic = self.create_image(p(12), p(12), anchor="nw")
@@ -1048,9 +1109,7 @@ class Tile(ctk.CTkCanvas):
         self.w = w
         s, h = self.s, round(TILE_HEIGHT * self.s)
         p = lambda v: round(v * s)   # noqa: E731
-        self.draw.draw_rounded_rect_with_border(w, h, p(14), p(1))
-        self.tag_lower("inner_parts")
-        self.tag_lower("border_parts")
+        self.tag_lower(self.card)
         base = p(12 + ART)   # the info row lines up with the picture's bottom edge
         self.coords(self.meta, p(76), base + p(1))
         self.coords(self.chip_bg, w - p(12), base + p(2))
@@ -1228,8 +1287,8 @@ class Tile(ctk.CTkCanvas):
         return fg, border, accent if self.playing else fg, accent
 
     def _recolor(self, fg, border, progress):
-        self.itemconfig("inner_parts", fill=fg, outline=fg)   # (CTkCanvas.itemconfig: handles its corner glyphs)
-        self.itemconfig("border_parts", fill=border, outline=border)
+        if self.w:
+            self.itemconfigure(self.card, image=card_photo(self.w, round(TILE_HEIGHT * self.s), fg, border, self.s))
         self.itemconfigure(self.track, fill=fg if not self.playing else mix(fg, TEXT, 0.08))
         self.itemconfigure(self.fill, fill=progress)
         if self.w:   # the ⋯ hover backdrop follows the card
@@ -1470,6 +1529,7 @@ class Dragger:
         self.slot = None      # where it would land on the board: (index, visible names)
         self.tab = None       # the group tab it's over, if any
         self.pos = (0, 0)
+        self.snap = None      # copies of the board's tiles, taken when the drag started
         self._scroll_job = None
 
     @property
@@ -1498,10 +1558,12 @@ class Dragger:
         """tile was pressed at (grab_x, grab_y) inside it and the pointer has moved to x, y."""
         app = self.app
         app.close_menus()
-        if app.page is not None and app.page._slide is not None:
+        if app.page is not None:
             app.page.stop_slide()
-            app.page.layout(app.page.columns, app.page.query or "")
         self.tile, self.grab = tile, (grab_x, grab_y)
+        # copies of the tiles for the slide when it's dropped, taken now, before the chip or the faint
+        # tile are drawn (skipped if a menu was just open: it could still be fading over the board)
+        self.snap = app.page.snapshot() if app.page is not None and not (tile._down and tile._down[4]) else None
         tile._set_hover(False)
         tile.set_dragging(True)
         win = self._ghost()
@@ -1556,11 +1618,12 @@ class Dragger:
         if slot is not None:
             index, visible = slot
             name = tile.name
-            moved = True
+            moved, snaps, self.snap = True, self.snap, None
             if index < len(visible) and visible[index] != name and (index == 0 or visible[index - 1] != name):
-                app.set_order(move_in_order(app.cfg["order"], name, visible[index]), dropped=name)
+                app.set_order(move_in_order(app.cfg["order"], name, visible[index]), dropped=name, snaps=snaps)
             elif index == len(visible) and visible and visible[-1] != name:
-                app.set_order(move_in_order(app.cfg["order"], name, visible[-1], after=True), dropped=name)
+                app.set_order(move_in_order(app.cfg["order"], name, visible[-1], after=True), dropped=name,
+                              snaps=snaps)
             else:
                 moved = False
             self._land(tile.name, moved)
@@ -1568,6 +1631,7 @@ class Dragger:
         self._land(tile.name)
 
     def cancel(self):
+        self.snap = None
         if self.active:
             name = self.tile.name
             self._finish()
@@ -1599,7 +1663,10 @@ class Dragger:
             fade_away(g, done=g.withdraw)
             return
         if moved:
-            tile.flash()
+            if page.overlay is not None:   # it's under the slide's canvas: light up as that lifts
+                page.after_slide = (*page.after_slide, tile.flash)
+            else:
+                tile.flash()
         # where the tile is headed, without asking Tk for the new layout (that would draw it)
         tx, ty = page.targets.get(name) or (tile.winfo_x(), tile.winfo_y())
         cx = page.frame.winfo_rootx() + tx + tile.winfo_width() // 2
@@ -1712,6 +1779,8 @@ class Page:
         self.dirty = True
         self.msg = ctk.CTkLabel(self.frame, text="", font=font(13), text_color=MUTED)
         self.empty = None
+        self.geom, self.targets = {}, {}
+        tk.Misc.bind(self.frame, "<Configure>", lambda e=None: self._reflow(), add="+")
         if key == ALL:   # first-run screen
             self.empty = ctk.CTkFrame(self.frame, fg_color="transparent")
             ctk.CTkLabel(self.empty, text="", image=tile_art(None, ACCENT)).pack(pady=(64, 14))
@@ -1740,12 +1809,15 @@ class Page:
                 if tile.name != name:
                     if tile.name in self.placed:
                         self.placed[name] = self.placed.pop(tile.name)
+                    if tile.name in self.geom:
+                        self.geom[name] = self.geom.pop(tile.name)
                     tile.name = name
                 tile.refresh()
                 tile._paint()
             self.tiles[name] = tile
         for name, t in old.items():
             self.placed.pop(name, None)
+            self.geom.pop(name, None)
             t.destroy()
         self.built = self.dirty = True
 
@@ -1755,76 +1827,151 @@ class Page:
         self.tiles = {n: self.tiles[n] for n in self.app.clips if n in self.tiles}
         self.dirty = True
 
-    # --- sliding into a new order ---
+    # --- placing tiles ---
+    # Tiles are placed at exact cells (x, y, width) worked out here, not gridded. Moving a widget
+    # between Tk's geometry managers hides and re-shows it, and every tile flashed when a slide
+    # started and ended; with place() throughout, a slide only ever moves them.
     _slide = None      # the running slide (a token), if any
-    targets = {}       # where each sliding tile is headed: name -> (x, y) in the scroll area
+    _moves = ()        # its (widget, x0, y0, x1, y1)
+    _width = 0         # scroll area width the cells were worked out for
+    slide_from = None  # (cells before, dropped name): set by App.set_order, used by the next layout
+    targets = {}       # where each tile sits (or is sliding to): key -> (x, y) in the scroll area
+    geom = {}          # where each shown widget is placed: key -> (x, y, width)
 
     def cells(self):
-        """{name: (x, y)} of the tiles on screen now, in the page's scroll area."""
-        return {n: (self.tiles[n].winfo_x(), self.tiles[n].winfo_y())
-                for n in self.placed if not isinstance(n, tuple) and n in self.tiles}
+        """{name: (x, y)} of the tiles' cells now, in the page's scroll area."""
+        return {n: g[:2] for n, g in self.geom.items() if not isinstance(n, tuple) and n in self.tiles}
 
-    def slide(self, before, dropped=None, ms=220):
-        """The tiles are in their new order (and gridded there, not drawn yet). Take the ones you can
-        see out of the grid, put them back where they were, and glide each to its new cell; then
-        hand them back to the grid. Cells are the same size, so a tile's new cell is wherever the
-        tile that used to be at that index was. Grid geometry is never computed in between, so
-        nothing shows the new layout before the slide starts."""
-        shown = [n for n in self.tiles if n in before]
-        cells = [before[n] for n in sorted(before, key=lambda n: (before[n][1], before[n][0]))]
-        if len(cells) != len(shown):
+    def _metrics(self, cols):
+        s = self.frame._get_widget_scaling()
+        width = self.frame.winfo_width()
+        if width <= 1:   # not on screen yet: the board's width less the scrollbar
+            width = max(1, self.app.holder.winfo_width() - round(24 * s))
+        gap = round(6 * s)
+        return width, gap, width / cols, round(TILE_HEIGHT * s) + 2 * gap
+
+    overlay = None     # the canvas a slide is drawn on (see _slide_on_canvas)
+    after_slide = ()   # things to do once it lifts
+
+    def snapshot(self):
+        """Copies of the tiles exactly as they look on screen now, for drawing a slide on one canvas:
+        {key: (image, dx, dy)}, dx, dy being where a copy starts inside its tile (a tile cut off by
+        the edge of the board is copied in part). None if the board isn't on screen."""
+        c = self.frame._parent_canvas
+        vx, vy, vw, vh = c.winfo_rootx(), c.winfo_rooty(), c.winfo_width(), c.winfo_height()
+        if vw <= 1 or vh <= 1:
+            return None
+        try:
+            im = screen_grab(vx, vy, vw, vh)
+        except Exception:
+            log.exception("board snapshot")
+            return None
+        out = {}
+        widgets = {**{("job", k): w for k, w in self.pending.items()}, **self.tiles}
+        for key, w in widgets.items():
+            if key not in self.geom:
+                continue
+            x, y = w.winfo_rootx() - vx, w.winfo_rooty() - vy
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(vw, x + w.winfo_width()), min(vh, y + w.winfo_height())
+            if x1 > x0 and y1 > y0:
+                out[key] = (ImageTk.PhotoImage(im.crop((x0, y0, x1, y1))), x0 - x, y0 - y)
+        return out
+
+    def stop_slide(self):
+        """End a slide where it's headed."""
+        if self._slide is None:
             return
-        moves, self.targets = [], {}
-        for n, (x1, y1) in zip(shown, cells):
-            self.targets[n] = (x1, y1)
-            x0, y0 = (x1, y1) if n == dropped else before[n]   # the dropped one lands straight away
-            # every tile you can see leaves the grid, even ones that stay put: a grid row left
-            # empty collapses, and the rows below it would jump up for the length of the slide
-            moves.append((self.tiles[n], x0, y0, x1, y1))
-        if not any((x0, y0) != (x1, y1) for _, x0, y0, x1, y1 in moves):
-            return
-        frame = self.frame
-        # hold the scroll area's size while tiles are out of the grid (else it shrinks and jumps)
-        tk.Frame.configure(frame, height=frame.winfo_height())
-        tk.Misc.grid_propagate(frame, False)
-        for t, x0, y0, *_ in moves:
-            tk.Canvas.place(t, x=x0, y=y0, width=t.winfo_width(), height=t.winfo_height())
+        self._slide = None
+        for w, _, _, x1, y1 in self._moves:
+            if w.winfo_exists():
+                tk.Place.place_configure(w, x=x1, y=y1)
+        self._moves = ()
+        self._lift_overlay()
+
+    def _lift_overlay(self):
+        ov, self.overlay = self.overlay, None
+        if ov is not None and ov.winfo_exists():
+            ov.destroy()
+        later, self.after_slide = self.after_slide, ()
+        for fn in later:
+            try:
+                fn()
+            except Exception:
+                log.exception("after slide")
+
+    def _slide_on_canvas(self, snaps, before, geom, dropped, ms=220):
+        """Draw the slide on ONE canvas over the board, from copies of the tiles, and move the real
+        tiles to their new cells underneath straight away. Each tile is its own small window, and
+        with many moving at once Windows put frames on screen while some were repainted and others
+        weren't (torn cards); a single canvas is drawn off screen and shown in one go, so every
+        frame is whole. Returns False (nothing done) if a tile on screen has no copy."""
+        c = self.frame._parent_canvas
+        top, vw, vh = round(c.canvasy(0)), c.winfo_width(), c.winfo_height()
+        th = round(TILE_HEIGHT * self.frame._get_widget_scaling())
+        on_screen = lambda y: y + th > top and y < top + vh   # noqa: E731
+        widgets = {**{("job", k): w for k, w in self.pending.items()}, **self.tiles}
+        for key in geom:
+            if key != dropped and key not in snaps and (on_screen(geom[key][1]) or on_screen(before.get(key, geom[key])[1])):
+                return False
+        ov = tk.Canvas(self.frame, width=vw, height=vh, bg=BG, highlightthickness=0, bd=0)
+        items, keep = [], []
+        for key, (ph, dx, dy) in snaps.items():
+            if key == dropped or key not in geom:
+                continue
+            x0, y0 = before.get(key, geom[key][:2])
+            x1, y1 = geom[key][:2]
+            keep.append(ph)
+            items.append((ov.create_image(x0 + dx, y0 + dy - top, image=ph, anchor="nw"),
+                          x0 + dx, y0 + dy - top, x1 + dx, y1 + dy - top))
+        for it, x0, y0, x1, y1 in items:   # tiles changing rows glide over the others, not under them
+            if y0 != y1:
+                ov.tag_raise(it)
+        if dropped in geom:   # its new spot, empty and faint until the real tile shows (and lights up)
+            x, y, w = geom[dropped]
+            ph = card_photo(w, th, mix(CARD, BG, 0.6), mix(BORDER, ACCENT, 0.25), self.frame._get_widget_scaling())
+            keep.append(ph)
+            ov.create_image(x, y - top, image=ph, anchor="nw")
+        ov.keep = keep
+        tk.Place.place_configure(ov, x=0, y=top, width=vw, height=vh)
+        tk.Misc.lift(ov)   # (Canvas.lift raises canvas items; this raises the widget)
+        ov.update_idletasks()   # on screen, showing exactly what was there, before anything moves
+        self.overlay = ov
+        for key, w in widgets.items():   # the real tiles go straight to their new cells, underneath
+            if key in geom:
+                x, y, cw = geom[key]
+                tk.Place.place_configure(w, x=x, y=y, width=cw)
         token = self._slide = object()
+        self._moves = ()
 
         def step(e):
             if self._slide is not token:
                 return False
-            for t, x0, y0, x1, y1 in moves:
-                if (x0, y0) != (x1, y1):
-                    t.place_configure(x=round(x0 + (x1 - x0) * e), y=round(y0 + (y1 - y0) * e))
+            for it, x0, y0, x1, y1 in items:
+                ov.coords(it, round(x0 + (x1 - x0) * e), round(y0 + (y1 - y0) * e))
 
         def done():
             if self._slide is token:
-                self.stop_slide()
-                self.layout(self.columns, self.query or "")
-        animate(frame, ms, step, done=done)
+                self._slide = None
+                self._lift_overlay()   # the real tiles are already there
+        animate(ov, ms, step, done=done)
+        return True
 
-    def stop_slide(self):
-        """End a slide where it's headed: tiles back into the grid (at their new cells)."""
-        self.targets = {}
-        if self._slide is None:
-            return
-        self._slide = None
-        for t in self.tiles.values():
-            if t.winfo_manager() == "place":
-                t.place_forget()
-        self.placed = {k: v for k, v in self.placed.items() if isinstance(k, tuple)}   # regrid the tiles
-        self.dirty = True
-        tk.Misc.grid_propagate(self.frame, True)
+    def _reflow(self):
+        """The scroll area changed width (window resized): re-work the cells."""
+        if self.built and self.columns and self.frame.winfo_width() != self._width:
+            self.dirty = True
+            self.layout(self.columns, self.query or "")
 
     def layout(self, cols, query=""):
         self.stop_slide()
-        if not self.dirty and cols == self.columns and query == self.query:
+        slide, self.slide_from = self.slide_from, None
+        width, gap, colw, rowh = self._metrics(cols)
+        if not self.dirty and cols == self.columns and query == self.query and width == self._width:
             return
         self.dirty = False
-        for c in range(max(cols, self.columns)):
-            self.frame.columnconfigure(c, weight=1 if c < cols else 0, uniform="tiles" if c < cols else "")
-        self.columns, self.query = cols, query
+        self.columns, self.query, self._width = cols, query, width
+        s = self.frame._get_widget_scaling()
         # imports still downloading go first, where you'll see them; Quick import adds to No group
         jobs = list(self.app.jobs.values()) if self.key in (ALL, NO_GROUP) and not query else []
         for j in jobs:
@@ -1832,34 +1979,82 @@ class Page:
                 self.pending[j.id] = PendingTile(self.frame, self.app, j)
         items = [(("job", j.id), self.pending[j.id]) for j in jobs] + \
                 [(n, t) for n, t in self.tiles.items() if query in Path(n).stem.lower()]
-        self.msg.grid_forget()
+        tk.Place.place_forget(self.msg)
         if self.empty is not None:
-            self.empty.grid_forget()
+            tk.Place.place_forget(self.empty)
+        height = 0
         if not items:
-            if self.empty is not None and not self.tiles:
-                self.empty.grid(row=0, column=0, columnspan=cols)
-            else:
+            note = self.empty if self.empty is not None and not self.tiles else self.msg
+            if note is self.msg:
                 self.msg.configure(text="No sounds match your search." if query else
                                    "This group is empty. Right-click a sound > Move to group, "
                                    "or import straight into it.")
-                self.msg.grid(row=0, column=0, columnspan=cols, pady=60)
-        # only touch tiles whose spot changed
-        want = {key: (i // cols, i % cols) for i, (key, _) in enumerate(items)}
+            top = 0 if note is self.empty else round(60 * s)
+            tk.Place.place_configure(note, relx=0.5, y=top, anchor="n")
+            height = top + note.winfo_reqheight() + round(40 * s)
+        # cells: equal columns across the scroll area, a gap around every tile
+        want, geom = {}, {}
+        for i, (key, _) in enumerate(items):
+            r, c = divmod(i, cols)
+            x0, x1 = round(c * colw), round((c + 1) * colw)
+            want[key] = (r, c)
+            geom[key] = (x0 + gap, r * rowh + gap, x1 - x0 - 2 * gap)
+        if items:
+            height = -(-len(items) // cols) * rowh + gap
+        before, dropped, snaps = slide if slide else ({}, None, None)
+        if snaps and any(k in before and before[k] != g[:2] for k, g in geom.items() if k != dropped):
+            if self._slide_on_canvas(snaps, before, geom, dropped):
+                self.placed, self.geom = want, geom
+                self.targets = {k: g[:2] for k, g in geom.items()}
+                tk.Frame.configure(self.frame, height=max(1, height))
+                return
+        moves = []
         widgets = {**{("job", k): w for k, w in self.pending.items()}, **self.tiles}
         for key, w in widgets.items():
-            pos = want.get(key)
-            if pos is None:
-                if key in self.placed:
-                    w.grid_forget()
-            elif self.placed.get(key) != pos:
-                gap = 6 if isinstance(w, PendingTile) else round(6 * w.s)   # (canvases aren't auto-scaled)
-                w.grid(row=pos[0], column=pos[1], sticky="ew", padx=gap, pady=gap)
-        self.placed = want
+            g = geom.get(key)
+            if g is None:
+                if key in self.geom:
+                    tk.Place.place_forget(w)
+                continue
+            if self.geom.get(key) == g:
+                continue
+            x, y, cw = g
+            if key in before and key != dropped and before[key] != (x, y):
+                # a re-sort: start where it was and glide to its new cell (the one you dropped
+                # goes straight to its new cell)
+                tk.Place.place_configure(w, x=before[key][0], y=before[key][1], width=cw)
+                moves.append((w, before[key][0], before[key][1], x, y))
+            else:
+                tk.Place.place_configure(w, x=x, y=y, width=cw)
+        self.placed, self.geom = want, geom
+        self.targets = {k: g[:2] for k, g in geom.items()}
+        # nothing in the scroll area is gridded, so its height is ours to set
+        tk.Frame.configure(self.frame, height=max(1, height))
+        if moves:
+            self._slide_tiles(moves)
+
+    def _slide_tiles(self, moves, ms=220):
+        token = self._slide = object()
+        self._moves = moves
+
+        frame = self.frame
+
+        def step(e):
+            if self._slide is not token:
+                return False
+            for w, x0, y0, x1, y1 in moves:
+                tk.Place.place_configure(w, x=round(x0 + (x1 - x0) * e), y=round(y0 + (y1 - y0) * e))
+
+        def done():
+            if self._slide is token:
+                self._slide, self._moves = None, ()
+        animate(frame, ms, step, done=done)
 
     def drop_job(self, job):
         w = self.pending.pop(job.id, None)
         if w is not None:
             self.placed.pop(("job", job.id), None)
+            self.geom.pop(("job", job.id), None)
             w.destroy()
             self.dirty = True
 
@@ -1893,6 +2088,7 @@ class App:
         _thumbs.clear()
         _photos.clear()
         _tkfonts.clear()
+        _card_photos.clear()
         self.engine = engine.Engine()
         self.hotkeys = HotkeyManager()
         self.clips = {}            # filename -> float32 array
@@ -1940,7 +2136,7 @@ class App:
         root.after(800, self._prerender_settings)
 
     def _root_configured(self):
-        """The window moved or resized: menus would be left floating, and Audio setup may need
+        """The window moved or resized: menus would be left floating, and Settings may need
         to get narrower (or can grow back) to fit."""
         if self.open_menus:
             self.close_menus()
@@ -1987,12 +2183,12 @@ class App:
         self.theme_btn = button(head, "Theme", None, "secondary", image=dot_image(ACCENT, 12), compound="left")
         self.theme_btn.configure(command=self.theme_menu)
         self.theme_btn.grid(row=0, column=4, rowspan=2, padx=(0, 8))
-        self.settings_btn = button(head, "Audio setup", self.toggle_settings, "secondary", icon_name="sliders")
+        self.settings_btn = button(head, "Settings", self.toggle_settings, "secondary", icon_name="sliders")
         self.settings_btn.grid(row=0, column=5, rowspan=2)
         fade_to(self.settings_btn, "on", (CARD, BORDER),
                 lambda f, b: self.settings_btn.configure(fg_color=f, border_color=b))
 
-        # Audio setup: a popover that glides down from its button (see toggle_settings). Its own
+        # Settings: a popover that glides down from its button (see toggle_settings). Its own
         # window, so it can fade and move without the board underneath redrawing.
         self.settings_win = popup_window(root)
         self.settings = ctk.CTkFrame(self.settings_win, fg_color="transparent")
@@ -2003,7 +2199,7 @@ class App:
         root.bind("<Control-v>", self._paste, add="+")
         root.bind("<Control-V>", self._paste, add="+")
         self.settings.columnconfigure(1, weight=1)
-        ctk.CTkLabel(self.settings, text="Audio setup", font=font(14, "bold"), text_color=TEXT, anchor="w").grid(
+        ctk.CTkLabel(self.settings, text="Audio", font=font(14, "bold"), text_color=TEXT, anchor="w").grid(
             row=0, column=0, columnspan=3, sticky="w", padx=14, pady=(10, 2))
         self.mic_var = tk.StringVar(value=self.cfg["mic"] or "")
         self.cable_var = tk.StringVar(value=self.cfg["cable"] or "")
@@ -2032,6 +2228,17 @@ class App:
             row=0, column=0, sticky="w", padx=14, pady=10)
         button(self.cable_help, "Get VB-CABLE", lambda: os.startfile("https://vb-audio.com/Cable/"),
                "primary", width=120).grid(row=0, column=1, padx=12)
+        # (row 4 is the VB-CABLE help, when it shows)
+        tk.Frame(self.settings, height=1, bg=mix(ELEVATED, BORDER, 0.8), bd=0, highlightthickness=0).grid(
+            row=5, column=0, columnspan=3, sticky="ew", padx=14, pady=(2, 8))
+        ctk.CTkLabel(self.settings, text="Playback", font=font(14, "bold"), text_color=TEXT, anchor="w").grid(
+            row=6, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 2))
+        self.option_vars = {}
+        for r, (key, title, about) in enumerate((
+                ("solo", "One sound at a time", "Starting a sound stops the others."),
+                ("toggle_stop", "Press a playing sound to stop it",
+                 "A second click or hotkey stops it, instead of starting it over.")), start=7):
+            self._option_row(r, key, title, about, last=r == 8)
         self.settings_open = False
 
         # toolbar
@@ -2127,8 +2334,28 @@ class App:
                                           width=124, corner_radius=6)
         self.stop_key_btn.pack(pady=(4, 0))
 
+    def _option_row(self, row, key, title, about, last=False):
+        """One setting in the Playback section: what it does on the left, its switch on the right.
+        Clicking the words flips it too."""
+        var = self.option_vars[key] = tk.BooleanVar(value=bool(self.cfg.get(key)))
+
+        def changed():
+            self.cfg[key] = var.get()
+            self.save_config()
+        text = ctk.CTkFrame(self.settings, fg_color="transparent")
+        text.grid(row=row, column=0, columnspan=2, sticky="w", padx=14, pady=(6, 14 if last else 4))
+        words = [ctk.CTkLabel(text, text=title, font=font(13), text_color=TEXT, anchor="w", height=18),
+                 ctk.CTkLabel(text, text=about, font=font(12), text_color=MUTED, anchor="w", height=16)]
+        for w in words:
+            w.pack(anchor="w")
+            w.bind("<Button-1>", lambda e=None: (var.set(not var.get()), changed()))
+        ctk.CTkSwitch(self.settings, text="", variable=var, command=changed, width=44, switch_width=40,
+                      switch_height=20, progress_color=ACCENT, fg_color=BORDER, button_color=TEXT,
+                      button_hover_color="#ffffff").grid(row=row, column=2, sticky="e", padx=(0, 14),
+                                                         pady=(6, 14 if last else 4))
+
     def _escape(self, e=None):
-        """Esc closes the topmost thing: a drag, a menu, else Audio setup."""
+        """Esc closes the topmost thing: a drag, a menu, else Settings."""
         if self.dragger.active:
             self.dragger.cancel()
         elif self.open_menus:
@@ -2143,7 +2370,7 @@ class App:
             return "break"   # just clear it; a second Esc closes popups as usual
 
     def toggle_settings(self, show=None):
-        """Audio setup glides down from its button in its own window, over the board. (Opening it
+        """Settings glides down from its button in its own window, over the board. (Opening it
         inside the window made the board redraw underneath, which is what made it jittery.)"""
         open_ = (not self.settings_open) if show is None else show
         if open_ == self.settings_open and show is not None:
@@ -2171,7 +2398,7 @@ class App:
     SETTINGS_WIDTH = 660
 
     def _settings_spot(self):
-        """Size Audio setup for the window (narrower only if the window is) and return where it
+        """Size Settings for the window (narrower only if the window is) and return where it
         goes: right-aligned under its button."""
         win, b = self.settings_win, self.settings_btn
         scale = self.root._get_window_scaling()
@@ -2184,14 +2411,14 @@ class App:
         return x, y
 
     def _place_settings(self):
-        """Keep the open Audio setup under its button (the window moved, or its contents changed)."""
+        """Keep the open Settings under its button (the window moved, or its contents changed)."""
         if self.settings_open:
             x, y = self._settings_spot()
             if self.settings_win.motion is None or float(self.settings_win.attributes("-alpha")) >= 1:
                 self.settings_win.geometry(f"+{x}+{y}")
 
     def _prerender_settings(self):
-        """Draw the Audio setup popover once out of sight, so its first opening is as quick as the rest."""
+        """Draw the Settings popover once out of sight, so its first opening is as quick as the rest."""
         if not self.settings_open:
             win = self.settings_win
             self._settings_spot()
@@ -2670,7 +2897,7 @@ class App:
         self.active_menu = None
 
     def _popup(self, event, master=None, width=None, keep_settings=False):
-        """keep_settings: the menu belongs to Audio setup (its device dropdowns); any other menu
+        """keep_settings: the menu belongs to Settings (its device dropdowns); any other menu
         closes that panel, so the two never overlap."""
         self.close_menus()
         if not keep_settings:
@@ -2681,7 +2908,7 @@ class App:
 
     def _click_anywhere(self, event):
         """Clicking outside an open menu closes it (tiles handle their own clicks first), and
-        clicking outside Audio setup closes that panel."""
+        clicking outside Settings closes that panel."""
         try:
             top = event.widget.winfo_toplevel()
         except Exception:
@@ -2690,9 +2917,9 @@ class App:
         # a click in any menu window, including one that's just closing after a pick
         in_menu = isinstance(top, _MenuWindow) and not in_settings and top is not getattr(self, "_toast", None)
         if self.open_menus and event.serial != self._menu_serial and not in_menu:
-            self.close_menus()   # including a device list, when you click elsewhere in Audio setup
+            self.close_menus()   # including a device list, when you click elsewhere in Settings
         if self.settings_open and not (in_menu or in_settings):
-            # the Audio setup button toggles it itself
+            # the Settings button toggles it itself
             if not str(event.widget).startswith(str(self.settings_btn)):
                 self.toggle_settings(False)
 
@@ -2772,26 +2999,22 @@ class App:
         if announce:
             self.toast(f"Moved '{Path(name).stem}' to {group or 'No group'}")
 
-    def set_order(self, order, dropped=None):
+    def set_order(self, order, dropped=None, snaps=None):
         """Show the board in this order and remember it. The tiles you can see slide to their new
         spots; dropped (the sound you just let go of) goes straight to its new one instead."""
         self.cfg["order"] = [n for n in order if n in self.clips]
         self.clips = {n: self.clips[n] for n in self.cfg["order"]}
         self.save_config()
         page = self.page
-        # still sliding from the last drop: tiles aren't where the grid says, so this one just snaps
-        sliding = page is not None and page._slide is not None
         if page is not None:
-            page.stop_slide()
-        before = page.cells() if page is not None and not sliding else {}
-        # only the order changed: move tiles in the grid, don't re-render them (a full sync of every
-        # page plus a whole-window repaint held the drop up ~200 ms before its copy could glide in)
+            page.stop_slide()   # a slide still running from the last drop ends where it was headed
+            page.slide_from = (page.cells(), dropped, snaps)
+        # only the order changed: move tiles, don't re-render them (a full sync of every page plus a
+        # whole-window repaint held the drop up ~200 ms before its copy could glide in)
         for p in self.pages.values():
             if p.built:
                 p.reorder()
-        self._show_page()   # the page you see now; the others catch up when shown
-        if page is not None and page is self.page and before:
-            page.slide(before, dropped)
+        self._show_page()   # the page you see slides; the others catch up when shown
 
     def sort_az(self):
         self.set_order(sorted(self.clips, key=lambda n: Path(n).stem.lower()))
@@ -2851,11 +3074,19 @@ class App:
             t.refresh()
 
     def play(self, name):
+        """A click or a hotkey. Playback settings: with toggle_stop, pressing a sound that's playing
+        stops it; with solo, starting a sound stops whatever else is playing first."""
         data = self.clips.get(name)
-        if data is not None:
-            self.engine.play(name, data)
-            # hotkeys call this from the keyboard thread: light the tile up on the UI thread
-            self.root.after(0, lambda: [t.flash() for t in self.tiles_for(name) if t.winfo_exists()])
+        if data is None:
+            return
+        if self.cfg.get("toggle_stop") and name in self.engine.progress():
+            self.engine.stop_clip(name)   # its tile settles back on the next progress poll
+            return
+        if self.cfg.get("solo"):
+            self.engine.stop_all()
+        self.engine.play(name, data)
+        # hotkeys call this from the keyboard thread: light the tile up on the UI thread
+        self.root.after(0, lambda: [t.flash() for t in self.tiles_for(name) if t.winfo_exists()])
 
     def _poll_playing(self):
         progress = self.engine.progress()
@@ -3331,7 +3562,17 @@ class App:
         self.root.destroy()
 
 
+APP_ID = "JondisBoard.Soundboard"
+
+
 def main():
+    # Our own taskbar identity, before any window exists. Started from a shortcut (the desktop one),
+    # Windows otherwise ties the taskbar button to that shortcut and shows its icon (the exe's,
+    # always green) instead of the window's, so the taskbar ignored the theme.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except Exception:
+        log.exception("could not set the app id")
     ctk.set_appearance_mode("dark")
     smooth_timers(True)
     try:
