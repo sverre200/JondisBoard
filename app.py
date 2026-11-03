@@ -1743,6 +1743,12 @@ class Page:
             t.destroy()
         self.built = self.dirty = True
 
+    def reorder(self):
+        """Put the tiles in app.clips order (a drag changed it). Nothing about a tile changed, so
+        nothing is redrawn; layout() just moves the ones whose spot changed."""
+        self.tiles = {n: self.tiles[n] for n in self.app.clips if n in self.tiles}
+        self.dirty = True
+
     def layout(self, cols, query=""):
         if not self.dirty and cols == self.columns and query == self.query:
             return
@@ -2700,11 +2706,12 @@ class App:
         self.cfg["order"] = [n for n in order if n in self.clips]
         self.clips = {n: self.clips[n] for n in self.cfg["order"]}
         self.save_config()
-        with self._frozen():   # the whole board settles in one frame
-            for p in self.pages.values():
-                if p.built:
-                    p.sync()
-            self._show_page()
+        # only the order changed: move tiles in the grid, don't re-render them (a full sync of every
+        # page plus a whole-window repaint held the drop up ~200 ms before its copy could glide in)
+        for p in self.pages.values():
+            if p.built:
+                p.reorder()
+        self._show_page()   # the page you see now; the others catch up when shown
 
     def sort_az(self):
         self.set_order(sorted(self.clips, key=lambda n: Path(n).stem.lower()))
