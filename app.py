@@ -866,6 +866,70 @@ def button(master, text, command, kind="secondary", icon_name=None, width=None, 
     return b
 
 
+class Toggle(ctk.CTkCanvas):
+    """An on/off switch whose knob glides across while the track fades to the accent colour
+    (customtkinter's switch jumps). Drives a BooleanVar; setting the variable from elsewhere
+    (e.g. clicking the setting's words) animates it too."""
+    W, H = 40, 22
+
+    def __init__(self, master, variable, command=None, bg=None):
+        self.s = s = master._get_widget_scaling()
+        super().__init__(master, width=round(self.W * s), height=round(self.H * s), bg=bg or BG,
+                         highlightthickness=0, bd=0)
+        self.var, self.command = variable, command
+        self.t = 1.0 if variable.get() else 0.0   # 0 = off, 1 = on (animated in between)
+        self.hover = False
+        self.track = self.create_image(0, 0, anchor="nw")
+        self.knob = self.create_image(0, 0, anchor="nw")
+        self.bind("<Button-1>", lambda e=None: self.toggle())
+        self.bind("<Enter>", lambda e=None: self._set_hover(True))
+        self.bind("<Leave>", lambda e=None: self._set_hover(False))
+        variable.trace_add("write", lambda *a: self.winfo_exists() and self._slide_to(1.0 if self.var.get() else 0.0))
+        self._draw()
+
+    def toggle(self):
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+    def _set_hover(self, on):
+        self.hover = on
+        self._draw()
+
+    def _slide_to(self, goal):
+        start = self.t
+        token = self._run = object()
+
+        def step(e):
+            if self._run is not token:
+                return False
+            self.t = start + (goal - start) * e
+            self._draw()
+        animate(self, MOTION_OPEN, step)
+
+    def _draw(self):
+        s, t = self.s, self.t
+        w, h = round(self.W * s), round(self.H * s)
+        off = mix(BORDER, TEXT, 0.1) if self.hover else BORDER
+        on = mix(ACCENT, "#ffffff", 0.12) if self.hover else ACCENT
+        track = mix(off, on, t)
+        self.itemconfigure(self.track, image=photo(("toggle", w, h, track), lambda: pill_pil(w, h, track), (w, h)))
+        d, pad = h - round(6 * s), round(3 * s)
+        knob = mix(mix(TEXT, BG, 0.15), "#ffffff", t)
+        self.itemconfigure(self.knob, image=photo(("knob", d, knob), lambda: pill_pil(d, d, knob), d))
+        self.coords(self.knob, round(pad + (w - d - 2 * pad) * t), pad)
+
+
+def labelled_toggle(master, text, variable, command=None, bg=None):
+    """A Toggle with its words to the right (clicking the words flips it too). Returns the frame."""
+    row = ctk.CTkFrame(master, fg_color="transparent")
+    Toggle(row, variable, command, bg=bg).pack(side="left")
+    words = ctk.CTkLabel(row, text=text, font=font(13), text_color=TEXT, height=22)
+    words.pack(side="left", padx=(10, 0))
+    words.bind("<Button-1>", lambda e=None: (variable.set(not variable.get()), command and command()))
+    return row
+
+
 class Select(ctk.CTkFrame):
     """A dropdown field that opens JondisBoard's own dark menu.
     (CTkOptionMenu opens Windows' native menu, which looks out of place.)"""
@@ -1304,10 +1368,11 @@ class Tile(ctk.CTkCanvas):
         ms = max(left, MOTION_HOVER if self.hover or self.playing else MOTION_UNHOVER)
         fade_to(self, "look", (fg, border, progress), self._recolor, ms)
 
-    def flash(self):
-        """Light up for a moment when its sound fires (click or hotkey), then settle."""
+    def flash(self, strength=0.32):
+        """Light up for a moment when its sound fires (click or hotkey), then settle. A dropped
+        sound arriving in its new spot gets a softer one (strength)."""
         fg, border, progress, accent = self._look()
-        lit = mix(fg, accent, 0.32)
+        lit = mix(fg, accent, strength)
         fade_to(self, "look", (lit, accent, progress if self.playing else lit), self._recolor, 0)
         self._flash_until = time.perf_counter() + MOTION_FLASH / 1000
         self._paint()
@@ -1563,8 +1628,10 @@ class Dragger:
         self.tile, self.grab = tile, (grab_x, grab_y)
         # copies of the tiles for the slide when it's dropped, taken now, before the chip or the faint
         # tile are drawn (skipped if a menu was just open: it could still be fading over the board)
-        self.snap = app.page.snapshot() if app.page is not None and not (tile._down and tile._down[4]) else None
         tile._set_hover(False)
+        fade_to(tile, "look", tile._look()[:3], tile._recolor, 0)   # straight to its resting look
+        self.snap = app.page.snapshot(settle=True) if app.page is not None and not (tile._down and tile._down[4]) \
+            else None
         tile.set_dragging(True)
         win = self._ghost()
         a = self.GHOST_ART
@@ -1664,9 +1731,9 @@ class Dragger:
             return
         if moved:
             if page.overlay is not None:   # it's under the slide's canvas: light up as that lifts
-                page.after_slide = (*page.after_slide, tile.flash)
+                page.after_slide = (*page.after_slide, lambda: tile.flash(0.16))
             else:
-                tile.flash()
+                tile.flash(0.16)
         # where the tile is headed, without asking Tk for the new layout (that would draw it)
         tx, ty = page.targets.get(name) or (tile.winfo_x(), tile.winfo_y())
         cx = page.frame.winfo_rootx() + tx + tile.winfo_width() // 2
@@ -1853,10 +1920,17 @@ class Page:
     overlay = None     # the canvas a slide is drawn on (see _slide_on_canvas)
     after_slide = ()   # things to do once it lifts
 
-    def snapshot(self):
+    def snapshot(self, settle=False):
         """Copies of the tiles exactly as they look on screen now, for drawing a slide on one canvas:
         {key: (image, dx, dy)}, dx, dy being where a copy starts inside its tile (a tile cut off by
-        the edge of the board is copied in part). None if the board isn't on screen."""
+        the edge of the board is copied in part). None if the board isn't on screen.
+        settle: something on it just changed; draw that and wait for it to reach the screen first."""
+        if settle:
+            self.frame.update_idletasks()
+            try:
+                ctypes.windll.dwmapi.DwmFlush()   # until the next frame Windows puts on screen
+            except Exception:
+                pass
         c = self.frame._parent_canvas
         vx, vy, vw, vh = c.winfo_rootx(), c.winfo_rooty(), c.winfo_width(), c.winfo_height()
         if vw <= 1 or vh <= 1:
@@ -1927,11 +2001,15 @@ class Page:
         for it, x0, y0, x1, y1 in items:   # tiles changing rows glide over the others, not under them
             if y0 != y1:
                 ov.tag_raise(it)
-        if dropped in geom:   # its new spot, empty and faint until the real tile shows (and lights up)
+        if dropped in geom:   # it's already in its new spot (the copy was taken before it went faint)
             x, y, w = geom[dropped]
-            ph = card_photo(w, th, mix(CARD, BG, 0.6), mix(BORDER, ACCENT, 0.25), self.frame._get_widget_scaling())
+            if dropped in snaps:
+                ph, dx, dy = snaps[dropped]
+                ov.create_image(x + dx, y + dy - top, image=ph, anchor="nw")
+            else:
+                ph = card_photo(w, th, CARD, BORDER, self.frame._get_widget_scaling())
+                ov.create_image(x, y - top, image=ph, anchor="nw")
             keep.append(ph)
-            ov.create_image(x, y - top, image=ph, anchor="nw")
         ov.keep = keep
         tk.Place.place_configure(ov, x=0, y=top, width=vw, height=vh)
         tk.Misc.lift(ov)   # (Canvas.lift raises canvas items; this raises the widget)
@@ -2319,9 +2397,7 @@ class App:
             self._set_volume(key, self.cfg[key])
             col += 1
         self.pass_var = tk.BooleanVar(value=self.cfg["mic_passthrough"])
-        ctk.CTkSwitch(inner, text="Send my voice", variable=self.pass_var, command=self._set_passthrough,
-                      font=font(13), text_color=TEXT, progress_color=ACCENT, fg_color=BORDER,
-                      button_color=TEXT, button_hover_color="#ffffff", switch_width=40, switch_height=20).grid(
+        labelled_toggle(inner, "Send my voice", self.pass_var, self._set_passthrough, bg=SURFACE).grid(
             row=0, column=col, padx=(0, 20))
         self._set_passthrough()
         stop = ctk.CTkFrame(inner, fg_color="transparent")
@@ -2349,10 +2425,8 @@ class App:
         for w in words:
             w.pack(anchor="w")
             w.bind("<Button-1>", lambda e=None: (var.set(not var.get()), changed()))
-        ctk.CTkSwitch(self.settings, text="", variable=var, command=changed, width=44, switch_width=40,
-                      switch_height=20, progress_color=ACCENT, fg_color=BORDER, button_color=TEXT,
-                      button_hover_color="#ffffff").grid(row=row, column=2, sticky="e", padx=(0, 14),
-                                                         pady=(6, 14 if last else 4))
+        Toggle(self.settings, var, changed, bg=ELEVATED).grid(row=row, column=2, sticky="e", padx=(0, 14),
+                                                              pady=(6, 14 if last else 4))
 
     def _escape(self, e=None):
         """Esc closes the topmost thing: a drag, a menu, else Settings."""
@@ -3017,7 +3091,10 @@ class App:
         self._show_page()   # the page you see slides; the others catch up when shown
 
     def sort_az(self):
-        self.set_order(sorted(self.clips, key=lambda n: Path(n).stem.lower()))
+        # a copy of the board first, so the whole board glides into order on one canvas (moving every
+        # tile window at once tore and dragged)
+        snaps = self.page.snapshot(settle=True) if self.page is not None else None
+        self.set_order(sorted(self.clips, key=lambda n: Path(n).stem.lower()), snaps=snaps)
         self.toast("Sorted A–Z")
 
     def _move_clip_files(self, name, folder, new_stem=None):
@@ -3407,9 +3484,7 @@ class App:
                                                                               padx=(6, 0))
 
         norm = tk.BooleanVar(value=True)
-        ctk.CTkSwitch(win, text="Even out loudness", variable=norm, font=font(13), text_color=TEXT,
-                      progress_color=ACCENT, fg_color=BORDER, button_color=TEXT,
-                      button_hover_color="#ffffff").pack(anchor="w", padx=24, pady=(16, 0))
+        labelled_toggle(win, "Even out loudness", norm, bg=BG).pack(anchor="w", padx=24, pady=(16, 0))
         msg = ctk.CTkLabel(win, text="", font=font(12), text_color=MUTED, wraplength=430, justify="left")
         spinner = ctk.CTkProgressBar(win, mode="indeterminate", height=3, corner_radius=2, progress_color=ACCENT,
                                      fg_color=CARD)
