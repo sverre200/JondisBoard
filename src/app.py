@@ -22,13 +22,14 @@ from PIL import Image, ImageDraw, ImageGrab, ImageOps, ImageTk
 import engine
 import importer
 import logo
+import paths
 from hotkeys import HotkeyManager, binding_label
 
 ROOT = importer.APP_DIR
 SOUNDS = ROOT / "sounds"
 TRASH = SOUNDS / "_deleted"
 CONFIG = ROOT / "config.json"
-ASSETS = Path(getattr(sys, "_MEIPASS", ROOT))  # bundled files when running as the exe
+ASSETS = paths.ASSETS_DIR   # icon.ico / icon.png: bundled in the exe, assets/ from source
 TILE_WIDTH = 250   # narrowest a tile gets (columns stretch to fill)
 TILE_HEIGHT = 80
 ART = 52            # the picture square on each tile

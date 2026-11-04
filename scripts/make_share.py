@@ -1,10 +1,10 @@
 r"""Build zips to share the soundboard with friends.
 
-    .venv\Scripts\python.exe make_share.py
+    .venv\Scripts\python.exe scripts\make_share.py
 
 Makes share\JondisBoard.zip (empty board) and share\JondisBoard + sounds.zip
-(your sounds, shrunk from WAV to Opus). Uses the JondisBoard.exe already in this
-folder, so rebuild that first if you changed the code.
+(your sounds, shrunk from WAV to Opus). Uses the JondisBoard.exe already in the
+project folder, so rebuild that first if you changed the code.
 """
 import shutil
 import subprocess
@@ -12,7 +12,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from paths import APP_DIR, find_ffmpeg
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from paths import APP_DIR, find_ffmpeg  # noqa: E402
 
 SHARE = APP_DIR / "share"
 AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".mp4", ".aac", ".opus", ".webm"}
@@ -22,7 +23,7 @@ def stage(folder, with_sounds, ffmpeg):
     folder.mkdir(parents=True)
     shutil.copy2(APP_DIR / "JondisBoard.exe", folder / "JondisBoard.exe")
     shutil.copy2(ffmpeg, folder / "ffmpeg.exe")
-    shutil.copy2(APP_DIR / "share_readme.txt", folder / "READ ME FIRST.txt")
+    shutil.copy2(APP_DIR / "assets" / "share_readme.txt", folder / "READ ME FIRST.txt")
     sounds = folder / "sounds"
     sounds.mkdir()
     if not with_sounds:
@@ -47,7 +48,7 @@ def main():
     exe = APP_DIR / "JondisBoard.exe"
     ffmpeg = find_ffmpeg()
     if not exe.exists() or not ffmpeg:
-        sys.exit("Need JondisBoard.exe in this folder and ffmpeg on PATH")
+        sys.exit("Need JondisBoard.exe in the project folder and ffmpeg on PATH")
     SHARE.mkdir(exist_ok=True)
     for zip_name, with_sounds in (("JondisBoard", False), ("JondisBoard + sounds", True)):
         print(f"Building {zip_name}.zip ...")

@@ -24,15 +24,14 @@ PICTURE = "Jazz"   # the one sound with a picture
 
 
 def make_copy():
-    """A temp folder holding the app's code, its icons, the test sounds and a silent config."""
+    """A temp folder laid out like the project (src/, assets/, sounds/, config.json), with the test
+    sounds and a silent config."""
     import numpy as np
     import soundfile as sf
     from PIL import Image
     d = Path(tempfile.mkdtemp(prefix="jondisboard-test-"))
-    for f in REPO.glob("*.py"):
-        shutil.copy2(f, d)
-    for f in ("icon.ico", "icon.png"):
-        shutil.copy2(REPO / f, d)
+    shutil.copytree(REPO / "src", d / "src", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(REPO / "assets", d / "assets")
     sounds = d / "sounds"
     (sounds / GROUP).mkdir(parents=True)
     t = np.linspace(0, 1.5, int(48000 * 1.5), endpoint=False)
@@ -66,7 +65,7 @@ class Suite:
         self.name = name
         self.dir = make_copy()
         self.cfg_path = self.dir / "config.json"
-        sys.path.insert(0, str(self.dir))
+        sys.path.insert(0, str(self.dir / "src"))
         import engine   # the copy's engine: no devices
         engine.list_devices = lambda kind: [f"Test {kind}"]
         engine.find_cable_output_name = lambda: "Test cable"

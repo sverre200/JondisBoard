@@ -1,6 +1,7 @@
 # Put a freshly built JondisBoard.exe in place without breaking a running copy.
 #
-#   powershell -ExecutionPolicy Bypass -File install_build.ps1 <path\to\new\JondisBoard.exe>
+#   powershell -ExecutionPolicy Bypass -File scripts\install_build.ps1 <path\to\new\JondisBoard.exe>
+#   (scripts\build.ps1 builds the exe and runs this for you)
 #
 # A running JondisBoard.exe keeps reading its own code from the exe file on disk, so
 # replacing that file while it runs makes the running app freeze or fail imports.
@@ -8,7 +9,7 @@
 # swaps it in as soon as every copy of JondisBoard has closed.
 param([Parameter(Mandatory = $true)][string]$NewExe)
 
-$dir = $PSScriptRoot
+$dir = Split-Path $PSScriptRoot -Parent   # the project folder (this script is in scripts\)
 $target = Join-Path $dir "JondisBoard.exe"
 $staged = Join-Path $dir "JondisBoard.update.exe"
 

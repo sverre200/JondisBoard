@@ -3,16 +3,16 @@
 Windows desktop soundboard: plays clips (plus the user's real mic) into VB-CABLE so games (DayZ) and Discord hear them. Python 3.12 + customtkinter (Tk), sounddevice/soundfile/numpy audio, `keyboard` global hotkeys, yt-dlp + ffmpeg imports. Shipped as a PyInstaller one-file exe.
 
 ## Layout
-- `logo.py` - the waveform logo, drawn per theme and per size (`theme_icon()` writes the window/taskbar .ico to %TEMP%\JondisBoard). `make_icon.py` regenerates `icon.ico`/`icon.png` (Toxic Green; only Explorer and the shortcut use them).
-- `app.py` - all UI (App, Page per group, Tile, PopupMenu, Select, dialogs, themes). `engine.py` - audio streams/mixing. `importer.py` - yt-dlp download, ffmpeg trim, thumbnails, pictures. `hotkeys.py`, `paths.py`.
-- User data next to the exe (not in git): `sounds/` (groups = subfolders, picture = same-name `.png`), `config.json`, `soundboard.log`.
+- `src/` - the app. `app.py` all UI (App, Page per group, Tile, PopupMenu, Select, dialogs, themes); `engine.py` audio streams/mixing; `importer.py` yt-dlp download, ffmpeg trim, thumbnails, pictures; `hotkeys.py`; `logo.py` the waveform logo drawn per theme and size (`theme_icon()` writes the window/taskbar .ico to %TEMP%\JondisBoard); `paths.py` where data (`APP_DIR`) and the app's pictures (`ASSETS_DIR`) live.
+- `assets/` - `icon.ico`/`icon.png` (Toxic Green; only Explorer and the shortcut use them; bundled into the exe) and `share_readme.txt`.
+- `scripts/` - `build.ps1` (build + install), `install_build.ps1`, `make_icon.py` (regenerates assets/icon.*), `make_share.py`. `tests/` - the UI suites.
+- User data in the project folder, next to the exe (not in git): `sounds/` (groups = subfolders, picture = same-name `.png`), `config.json`, `soundboard.log`. Run from source (`src\app.py`) the app uses the same folder (`APP_DIR` is the folder above `src/`).
 
 ## Build and install
 ```
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name JondisBoard --icon ..\icon.ico --add-data "..\icon.ico;." --add-data "..\icon.png;." --collect-data customtkinter --collect-all yt_dlp_ejs --specpath build --distpath build_out app.py
-powershell -ExecutionPolicy Bypass -File install_build.ps1 build_out\JondisBoard.exe
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 ```
-`--specpath build` keeps the generated spec in build/ (so `--icon`/`--add-data` paths are relative to build/, hence `..\`). Never copy over `JondisBoard.exe` while it runs: the one-file exe reads its code from that file lazily and freezes/fails imports. `install_build.ps1` stages the build and swaps it in after the app closes.
+Runs PyInstaller on `src\app.py` (low priority; `--specpath build` keeps the spec in build/, so its `--icon`/`--add-data` paths are relative to build/, hence `..\assets`) and then `scripts\install_build.ps1`. Never copy over `JondisBoard.exe` while it runs: the one-file exe reads its code from that file lazily and freezes/fails imports. `install_build.ps1` stages the build and swaps it in after the app closes.
 
 ## Testing / verification
 - Run `.venv\Scripts\python.exe tests\run_all.py` (or `run_all.py <word>` for some suites). `tests/_harness.py` builds a throwaway copy with generated sounds, a silent config and a stand-in audio engine, and drives the real App with synthetic events; add new checks there in the same style. The windows open on screen, so check `GetForegroundWindow` first: if the user is in a game, don't run them.
