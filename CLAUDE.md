@@ -15,7 +15,8 @@ powershell -ExecutionPolicy Bypass -File install_build.ps1 build_out\JondisBoard
 `--specpath build` keeps the generated spec in build/ (so `--icon`/`--add-data` paths are relative to build/, hence `..\`). Never copy over `JondisBoard.exe` while it runs: the one-file exe reads its code from that file lazily and freezes/fails imports. `install_build.ps1` stages the build and swaps it in after the app closes.
 
 ## Testing / verification
-- No unit-test suite yet. Verify with scripted runs of a **test copy** (copy the .py files and a few sounds to a scratch folder, `config.json` with all volumes 0 and `mic_passthrough: false`) so nothing reaches the user's mic, and drive the App object from a script.
+- Run `.venv\Scripts\python.exe tests\run_all.py` (or `run_all.py <word>` for some suites). `tests/_harness.py` builds a throwaway copy with generated sounds, a silent config and a stand-in audio engine, and drives the real App with synthetic events; add new checks there in the same style. The windows open on screen, so check `GetForegroundWindow` first: if the user is in a game, don't run them.
+- Visual problems (tearing, flicker) don't show in frame timings: record the screen frame by frame from a separate process (raw BitBlt, ~70 fps) and look at the frames.
 - Measure instead of eyeballing: frame gaps for animations, counts of `_draw` calls for redraw cost, `GetForegroundWindow` for focus.
 - Capture windows with `ImageGrab` (on screen) or `PrintWindow` (behind other windows). Don't make test windows topmost or move the user's mouse; the user is often in a fullscreen game.
 

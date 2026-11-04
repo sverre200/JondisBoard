@@ -2233,7 +2233,12 @@ class App:
 
     def _root_configured(self):
         """The window moved or resized: menus would be left floating, and Settings may need
-        to get narrower (or can grow back) to fit."""
+        to get narrower (or can grow back) to fit. (Windows also sends this when nothing moved,
+        e.g. after the start-up fade repaints the frame; that must not close a fresh toast.)"""
+        spot = (self.root.winfo_x(), self.root.winfo_y(), self.root.winfo_width(), self.root.winfo_height())
+        if spot == getattr(self, "_spot", None):
+            return
+        self._spot = spot
         if self.open_menus:
             self.close_menus()
         if self.settings_open:
@@ -3657,6 +3662,20 @@ class App:
         self.root.quit()
 
 
+def close_window(root):
+    """Destroy a main window after its main loop: cancel its pending timers first (they'd fire into
+    the next window's loop, with their callbacks already gone), then destroy it."""
+    try:
+        for job in root.tk.splitlist(root.tk.call("after", "info")):
+            root.after_cancel(job)
+    except tk.TclError:
+        pass
+    try:
+        root.destroy()
+    except tk.TclError:
+        log.exception("closing the window")
+
+
 APP_ID = "JondisBoard.Soundboard"
 
 
@@ -3682,10 +3701,7 @@ def _run_windows():
         root.report_callback_exception = lambda *a: log.error("UI error", exc_info=a)
         app = App(root)
         root.mainloop()
-        try:
-            root.destroy()
-        except tk.TclError:
-            log.exception("closing the window")
+        close_window(root)
         if not app.restart:
             break
 

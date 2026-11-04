@@ -18,13 +18,16 @@ SETUP (once, about 5 minutes)
 4. Open JondisBoard.exe.
    If Windows says "Windows protected your PC": click More info > Run anyway.
    (It's a homemade app with no paid signature, which is why Windows warns.)
-   Click "Audio setup" and check that "Your microphone" is your real mic.
+   Click "Settings" and check that "Your microphone" is your real mic.
 
 USING IT
 
 - Click a sound to play it. Right-click it to set a hotkey (numpad keys work well), rename or delete it.
+- Drag sounds to reorder them, or drop one on a group tab to move it there.
 - Give "Stop all" a hotkey too (click the small text under the red button).
-- "+ Import link": paste an Instagram reel/post or a YouTube link to add a sound.
+- Settings also has "One sound at a time" and "Press a playing sound to stop it".
+- "Quick import" (or Ctrl+V): copy an Instagram reel or YouTube link first, and it becomes a sound.
+  "Import link..." lets you name it, trim it or pick a group first.
   YouTube links need Node.js installed (https://nodejs.org); Instagram works without it.
 - In DayZ, hold push-to-talk (Caps Lock) while you press a sound's hotkey, or switch DayZ to voice activation.
 - In Discord, set Input Device to CABLE Output and turn Noise Suppression off.
