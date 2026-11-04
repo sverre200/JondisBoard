@@ -22,6 +22,9 @@ AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".mp4", ".aac", ".opus", 
 def stage(folder, with_sounds, ffmpeg):
     folder.mkdir(parents=True)
     shutil.copy2(APP_DIR / "JondisBoard.exe", folder / "JondisBoard.exe")
+    uninstaller = APP_DIR / "Uninstall JondisBoard.exe"
+    if uninstaller.exists():
+        shutil.copy2(uninstaller, folder / uninstaller.name)
     shutil.copy2(ffmpeg, folder / "ffmpeg.exe")
     shutil.copy2(APP_DIR / "assets" / "share_readme.txt", folder / "READ ME FIRST.txt")
     sounds = folder / "sounds"

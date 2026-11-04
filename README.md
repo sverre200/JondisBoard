@@ -34,4 +34,8 @@ Optional: YouTube imports need [Node.js](https://nodejs.org) installed. Instagra
 - **Hotkeys don't work in a game:** run JondisBoard as administrator (right-click → Run as administrator).
 - **Sounds play twice:** two copies of the app are open; close one.
 
+## Uninstall
+
+Run **`Uninstall JondisBoard.exe`** in the JondisBoard folder. It removes the app, its log and its shortcuts (desktop, Start menu, taskbar). Your sounds and settings stay unless you tick the box, and then they go to the Recycle Bin. VB-CABLE is a separate driver: remove it in Windows Settings → Apps if nothing else needs it.
+
 Building the app, running the tests and making the share zips: see [DEVELOPING.md](DEVELOPING.md).

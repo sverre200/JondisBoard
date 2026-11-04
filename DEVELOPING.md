@@ -7,7 +7,8 @@ Python 3.12 + customtkinter (Tk) for the window, sounddevice/soundfile/numpy for
 ```
 src/       the app: app.py (window, board, menus, Settings, dialogs, themes, drag and drop),
            engine.py (audio devices and mixing), hotkeys.py, importer.py (downloads, trimming,
-           thumbnails), logo.py (the waveform logo, per theme), paths.py
+           thumbnails), logo.py (the waveform logo, per theme), themes.py (colours),
+           uninstall.py ("Uninstall JondisBoard.exe"), paths.py
 assets/    icon.ico and icon.png (bundled into the exe), share_readme.txt
 scripts/   build.ps1, install_build.ps1, make_icon.py, make_share.py
 tests/     the UI test suites (run_all.py runs them)
@@ -41,7 +42,7 @@ Runs every suite (about a minute), each in its own process on a throwaway copy o
 powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 ```
 
-Builds `JondisBoard.exe` from `src\` (at low priority, so a game doesn't stutter) and puts it in the project folder. If the app is open, the new exe waits and swaps in when you close it: never copy over `JondisBoard.exe` while it's running, because the one-file exe reads its code from that file and freezes if it changes. To change the icon, edit `src\logo.py` and run `scripts\make_icon.py`.
+Builds `JondisBoard.exe` and `Uninstall JondisBoard.exe` from `src\` (at low priority, so a game doesn't stutter) and puts them in the project folder. If the app is open, the new exe waits and swaps in when you close it: never copy over `JondisBoard.exe` while it's running, because the one-file exe reads its code from that file and freezes if it changes. To change the icon, edit `src\logo.py` and run `scripts\make_icon.py`.
 
 ## Share with friends
 
@@ -49,7 +50,7 @@ Builds `JondisBoard.exe` from `src\` (at low priority, so a game doesn't stutter
 .venv\Scripts\python.exe scripts\make_share.py
 ```
 
-Makes `share\JondisBoard.zip` (empty board) and `share\JondisBoard + sounds.zip` (your sounds, shrunk to Opus), each with ffmpeg and `READ ME FIRST.txt` (from `assets\share_readme.txt`). It packs the current `JondisBoard.exe`, so build first if you changed the code.
+Makes `share\JondisBoard.zip` (empty board) and `share\JondisBoard + sounds.zip` (your sounds, shrunk to Opus), each with ffmpeg, the uninstaller and `READ ME FIRST.txt` (from `assets\share_readme.txt`). It packs the current `JondisBoard.exe`, so build first if you changed the code.
 
 ## Bulk import and Instagram logins
 

@@ -32,6 +32,11 @@ USING IT
 - In DayZ, hold push-to-talk (Caps Lock) while you press a sound's hotkey, or switch DayZ to voice activation.
 - In Discord, set Input Device to CABLE Output and turn Noise Suppression off.
 
+UNINSTALL
+
+- Run "Uninstall JondisBoard.exe" in this folder. Your sounds stay unless you tick the box
+  (then they go to the Recycle Bin). VB-CABLE: Windows Settings > Apps.
+
 TROUBLESHOOTING
 
 - Nobody hears the sounds: check the Windows default mic is still CABLE Output.
