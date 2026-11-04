@@ -9,10 +9,10 @@ Windows desktop soundboard: plays clips (plus the user's real mic) into VB-CABLE
 
 ## Build and install
 ```
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name JondisBoard --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." --collect-data customtkinter --collect-all yt_dlp_ejs --distpath build_out app.py
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name JondisBoard --icon ..\icon.ico --add-data "..\icon.ico;." --add-data "..\icon.png;." --collect-data customtkinter --collect-all yt_dlp_ejs --specpath build --distpath build_out app.py
 powershell -ExecutionPolicy Bypass -File install_build.ps1 build_out\JondisBoard.exe
 ```
-Never copy over `JondisBoard.exe` while it runs: the one-file exe reads its code from that file lazily and freezes/fails imports. `install_build.ps1` stages the build and swaps it in after the app closes.
+`--specpath build` keeps the generated spec in build/ (so `--icon`/`--add-data` paths are relative to build/, hence `..\`). Never copy over `JondisBoard.exe` while it runs: the one-file exe reads its code from that file lazily and freezes/fails imports. `install_build.ps1` stages the build and swaps it in after the app closes.
 
 ## Testing / verification
 - No unit-test suite yet. Verify with scripted runs of a **test copy** (copy the .py files and a few sounds to a scratch folder, `config.json` with all volumes 0 and `mic_passthrough: false`) so nothing reaches the user's mic, and drive the App object from a script.

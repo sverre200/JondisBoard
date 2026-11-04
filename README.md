@@ -91,7 +91,7 @@ Then click **Reload**.
 `JondisBoard.exe` must stay in this folder, since it keeps `sounds` and `config.json` beside it. After changing the code, rebuild it with:
 
 ```bash
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name JondisBoard --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." --collect-data customtkinter --collect-all yt_dlp_ejs --distpath build_out app.py
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --onefile --windowed --name JondisBoard --icon ..\icon.ico --add-data "..\icon.ico;." --add-data "..\icon.png;." --collect-data customtkinter --collect-all yt_dlp_ejs --specpath build --distpath build_out app.py
 ```
 
 ```bash

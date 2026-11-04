@@ -1,4 +1,4 @@
-﻿"""Write icon.ico / icon.png (the Toxic Green logo) for the exe and a preview of every theme.
+"""Write icon.ico / icon.png (the Toxic Green logo) for the exe, and build/icon_preview.png with every theme.
 
     python make_icon.py
 
@@ -22,5 +22,6 @@ for k, (name, t) in enumerate(THEMES.items()):
     for size in (128, 48, 32, 24, 16):
         preview.alpha_composite(logo.draw(size, logo.tile_color(t), t["ACCENT"]), (x, y + 128 - size))
         x += size + 10
-preview.save(here / "icon_preview.png")
-print("wrote icon.ico, icon.png, icon_preview.png")
+(here / "build").mkdir(exist_ok=True)
+preview.save(here / "build" / "icon_preview.png")   # build/ is git-ignored scratch space
+print("wrote icon.ico, icon.png and build/icon_preview.png")

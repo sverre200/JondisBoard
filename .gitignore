@@ -19,10 +19,5 @@ sounds/
 config.json
 *.log
 
-# original icon artwork (icon.ico/icon.png are kept: the build needs them)
-icon_art*.webp
-icon_old.*
-
 # misc
-Soundboard.bat
 reels.txt

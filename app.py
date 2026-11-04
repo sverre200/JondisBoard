@@ -279,6 +279,22 @@ WM_SETREDRAW = 0x000B
 RDW_REPAINT_ALL = 0x0001 | 0x0004 | 0x0080 | 0x0100 | 0x0400
 
 
+def later(widget, ms, fn):
+    """widget.after(ms, fn), but the timer lives on the main window and only runs fn if widget still
+    exists. A timer set on a widget itself breaks when the widget is destroyed first, or destroyed from
+    inside that very timer (a fade ending in destroy()): tkinter frees the callback's name early, a new
+    callback can get the same name, and tkinter's clean-up then deletes the wrong one. That left tiles
+    holding dead callbacks (switching theme crashed while closing them) and made stale timers call
+    unrelated handlers with no event."""
+    def run():
+        try:
+            if widget.winfo_exists():
+                fn()
+        except tk.TclError:
+            pass
+    return widget._root().after(ms, run)
+
+
 def animate(widget, duration_ms, step, done=None, delay_ms=0, warmup=False):
     """Run step(eased) with eased going 0 -> 1 over duration_ms, then done().
     Timed by the clock, not by counting frames: a late frame just lands further along instead of
@@ -311,10 +327,10 @@ def animate(widget, duration_ms, step, done=None, delay_ms=0, warmup=False):
                 if step(0.01) is False:
                     return
                 if state["frames"] == 1:
-                    widget.after_idle(lambda: widget.after(0, tick))
+                    host.after_idle(lambda: host.after(0, tick))
                     return
                 if not (on_time or state["frames"] >= 12):
-                    widget.after(7, tick)
+                    host.after(7, tick)
                     return
                 state["warmup"] = False
             now = time.perf_counter()
@@ -325,13 +341,15 @@ def animate(widget, duration_ms, step, done=None, delay_ms=0, warmup=False):
             if step(1 - (1 - t) ** 3) is False:
                 return
             if t < 1.0:
-                widget.after(7, tick)   # ~140 ticks/s; needs the 1 ms system timer (smooth_timers)
+                host.after(7, tick)   # ~140 ticks/s; needs the 1 ms system timer (smooth_timers)
             elif done:
                 done()
         except tk.TclError:
             pass   # the window went away mid-animation
 
-    widget.after(delay_ms, tick)
+    # timers on the main window, never on the widget: see later() (a fade often ends by destroying it)
+    host = widget._root()
+    host.after(delay_ms, tick)
 
 
 def smooth_timers(on):
@@ -1448,7 +1466,7 @@ class PendingTile(ctk.CTkFrame):
             return
         color = mix(CARD_HOVER, ACCENT, 0.16) if up else CARD_HOVER
         fade_to(self.art, "pulse", (color,), lambda c: self.art.configure(fg_color=c), 700)
-        self.after(760, lambda: self._pulse(not up))
+        later(self, 760, lambda: self._pulse(not up))
 
     def update_view(self):
         job = self.job
@@ -2235,7 +2253,7 @@ class App:
             # its own icon if iconbitmap() hasn't been called, but re-set it later to be sure
             win.iconbitmap(str(icon))
             crisp_icons(win, icon)
-            win.after(250, lambda: win.winfo_exists() and (win.iconbitmap(str(icon)), crisp_icons(win, icon)))
+            later(win, 250, lambda: (win.iconbitmap(str(icon)), crisp_icons(win, icon)))
 
     # ---------- UI ----------
     def _build_ui(self):
@@ -2530,7 +2548,7 @@ class App:
         y = root.winfo_rooty() + self.foot.winfo_y() - win.winfo_reqheight() - round(14 * s)
         owned_by(win, root)
         reveal(win, x, y, 0, SLIDE + 3)
-        win.after(4200, lambda: win.winfo_exists() and fade_away(win, 0, SLIDE // 2, MOTION_UNHOVER,
+        later(win, 4200, lambda: fade_away(win, 0, SLIDE // 2, MOTION_UNHOVER,
                                                                  done=win.destroy))
 
     def when_ready(self, fn):
@@ -3272,7 +3290,7 @@ class App:
                 win.geometry(f"+{x}+{y + round(rise * (1 - e))}")
             # the first frames run invisible (animate's warm-up), so it's fully drawn before it shows
             animate(win, MOTION_OPEN + 20, step, warmup=True)
-            win.after(400, make_sure_visible)
+            later(win, 400, make_sure_visible)
 
         def close(then=None):
             """Fade out, then destroy, then run then(). The app is clickable again straight away."""
@@ -3302,7 +3320,7 @@ class App:
                 win.lift()
                 win.attributes("-alpha", 1.0)
 
-        win.after(30, show)   # the caller builds the contents first
+        later(win, 30, show)   # the caller builds the contents first
         return win
 
     def _confirm(self, title, text, ok_text, on_ok, kind="danger"):
@@ -3325,7 +3343,7 @@ class App:
         if initial:
             entry.insert(0, initial)
         entry.pack(fill="x", padx=22)
-        win.after(150, lambda: (entry.focus_set(), entry.select_range(0, "end")))
+        later(win, 150, lambda: (entry.focus_set(), entry.select_range(0, "end")))
 
         def ok(*_):
             text = entry.get().strip()
@@ -3563,7 +3581,7 @@ class App:
 
         go.configure(command=begin)
         url.bind("<Return>", begin)
-        win.after(150, url.focus_set)
+        later(win, 150, url.focus_set)
 
     # ---------- misc ----------
     def save_config(self):
@@ -3634,7 +3652,9 @@ class App:
                 self.root.attributes("-alpha", a)
                 self.root.update_idletasks()
                 time.sleep(0.014)
-        self.root.destroy()
+        # stop the main loop; _run_windows destroys the window once it has returned. Destroying it here,
+        # from inside a menu's timer, tore down tkinter's callback bookkeeping mid-callback
+        self.root.quit()
 
 
 APP_ID = "JondisBoard.Soundboard"
@@ -3662,6 +3682,10 @@ def _run_windows():
         root.report_callback_exception = lambda *a: log.error("UI error", exc_info=a)
         app = App(root)
         root.mainloop()
+        try:
+            root.destroy()
+        except tk.TclError:
+            log.exception("closing the window")
         if not app.restart:
             break
 
