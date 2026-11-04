@@ -20,6 +20,13 @@ Runs PyInstaller on `src\app.py` (low priority; `--specpath build` keeps the spe
 - Measure instead of eyeballing: frame gaps for animations, counts of `_draw` calls for redraw cost, `GetForegroundWindow` for focus.
 - Capture windows with `ImageGrab` (on screen) or `PrintWindow` (behind other windows). Don't make test windows topmost or move the user's mouse; the user is often in a fullscreen game.
 
+## Audio engine (src/engine.py)
+- Both outputs come from the same in-memory float32 48 kHz stereo clip data: cable = clips x clip_volume (+ mic x mic_volume with Send my voice), headphones = clips x monitor_volume, each through its own `PeakGuard` (1 ms lookahead limiter at -1 dBFS; bit-exact pass-through, 1 ms late, while under it). Never add a hard clip, EQ, compression or other processing to one path only.
+- Non-48 kHz or >2-channel files go through ffmpeg with `paths.RESAMPLE` (tuned swr, ~-120 dB aliasing; this ffmpeg has no soxr), never a numpy interp resampler (it left -11 dB junk on treble) or a `[:, :2]` downmix (it dropped 5.1 centre dialogue).
+- Imports use two-pass linear loudnorm (`importer.loudness_filter`), not one-pass (a dynamic leveller that pumps music).
+- Callbacks: no allocation, no I/O, short lock only (`_mix_into` writes straight into PortAudio's buffer; the mic goes through the `MicBuffer` ring with a jitter cushion). `tests/test_audio.py` checks bit-exactness, peaks, mic gaps, cost (< 0.5 ms per 10 ms block) and allocations; it opens no windows or devices.
+- `scripts/audio_check.py loopback|record` uses the REAL cable: friends in voice hear it. It refuses while DayZ/Discord runs.
+
 ## Gotchas (all bit us before)
 - Edit source with the Edit/Write tools or Python using UTF-8. PowerShell 5.1 `Get-Content`/`Set-Content` round-trips mangle non-ASCII (`›` became `â€º`).
 - customtkinter: `resizable()` schedules a title-bar hide/show (set `_deactivate_windows_window_header_manipulation` on popups); its `place()` refuses `width=` (use `tk.Frame.place`); it already binds `<Button-1>` on "all", so bind `<Button-1>` explicitly, not `<ButtonPress>`.

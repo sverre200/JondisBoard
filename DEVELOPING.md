@@ -34,7 +34,15 @@ ffmpeg must be on PATH (or `ffmpeg.exe` next to the app). Run from source with `
 .venv\Scripts\python.exe tests\run_all.py
 ```
 
-Runs every suite (about a minute), each in its own process on a throwaway copy of the app with generated sounds and a stand-in audio engine, so nothing reaches your mic, cable, speakers or clipboard. The app's windows do open on screen while it runs, so don't run it mid-game. Add a word to run only some suites, e.g. `tests\run_all.py slide`.
+Runs every suite (about a minute), each in its own process on a throwaway copy of the app with generated sounds and a stand-in audio engine, so nothing reaches your mic, cable, speakers or clipboard. The app's windows do open on screen while it runs, so don't run it mid-game. Add a word to run only some suites, e.g. `tests\run_all.py slide`. `tests\run_all.py audio` (the audio engine's numbers: resampling, mixing, volumes, peak protection, mic buffer, cost) opens no windows and no devices, so it's fine mid-game.
+
+## Audio diagnostics
+
+```bash
+.venv\Scripts\python.exe scripts\audio_check.py
+```
+
+Offline (safe any time): runs test signals and some of your sounds through the engine's cable and headphone outputs at your saved volumes, and compares them with the source and with the old engine. `audio_check.py loopback` plays test signals through VB-CABLE and records them back from CABLE Output (level, frequency response, distortion, dropouts, sample-rate drift); `audio_check.py record 20` records what the game hears for 20 s while you press sounds. Both of those go out on your cable, so they refuse to run while DayZ or Discord is open (`--force` if nobody is in voice). Results (WAVs to compare by ear, plus report.txt) go to `build\audio_check\`. Dropout counters from normal use are written to `soundboard.log` when the audio restarts or the app closes.
 
 ## Build and install
 

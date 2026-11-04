@@ -37,6 +37,13 @@ UNINSTALL
 - Run "Uninstall JondisBoard.exe" in this folder. Your sounds stay unless you tick the box
   (then they go to the Recycle Bin). VB-CABLE: Windows Settings > Apps.
 
+BEST SOUND QUALITY
+
+- Discord: Noise Suppression, Echo Cancellation and Automatic Gain Control OFF.
+- Windows Sound > CABLE Output > Properties: Audio enhancements OFF, format 48000 Hz.
+- DayZ voice is mono and gets duller with distance, helmets and gas masks; that's the game.
+- Keep "Clips" around 80-100 %. Louder doesn't sound clearer to others.
+
 TROUBLESHOOTING
 
 - Nobody hears the sounds: check the Windows default mic is still CABLE Output.

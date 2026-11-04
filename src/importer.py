@@ -8,6 +8,7 @@ GUI uses import_clip(); you can also batch-import from the command line:
 reels.txt has one clip per line:   url | name | start | end   (name/start/end optional)
 """
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -20,10 +21,40 @@ from pathlib import Path
 import yt_dlp
 from PIL import Image, ImageOps
 
-from paths import APP_DIR, find_ffmpeg
+from paths import APP_DIR, RESAMPLE, find_ffmpeg
 
 SOUNDS_DIR = APP_DIR / "sounds"
 PICTURE_SIZE = 256
+
+
+LOUDNESS = "I=-16:TP=-1.5:LRA=11"   # target: -16 LUFS, true peak under -1.5 dBTP
+
+
+def _no_window():
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def loudness_filter(ffmpeg, cut):
+    """The -af chain that brings a clip to LOUDNESS as ONE fixed gain change (two-pass "linear"
+    loudnorm), so its dynamics stay exactly as they were. One-pass loudnorm (what this used to do)
+    is a dynamic leveller: it rides the gain up and down through the clip and squashes music.
+    cut: the ffmpeg input arguments (with -ss/-t). Falls back to one-pass if measuring fails."""
+    proc = subprocess.run([ffmpeg, "-hide_banner", "-nostats", *cut, "-vn",
+                           "-af", f"loudnorm={LOUDNESS}:print_format=json", "-f", "null", "-"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          creationflags=_no_window())
+    m = re.search(r'\{[^{}]*"input_i"[^{}]*\}', proc.stderr)
+    try:
+        j = json.loads(m.group(0))
+        measured = {k: float(j[k]) for k in ("input_i", "input_tp", "input_lra", "input_thresh",
+                                             "target_offset")}
+    except (AttributeError, KeyError, ValueError):
+        return f"loudnorm={LOUDNESS},{RESAMPLE}"
+    if measured["input_i"] < -70:          # silence: nothing to normalise
+        return RESAMPLE
+    return (f"loudnorm={LOUDNESS}:measured_I={measured['input_i']}:measured_TP={measured['input_tp']}"
+            f":measured_LRA={measured['input_lra']}:measured_thresh={measured['input_thresh']}"
+            f":offset={measured['target_offset']}:linear=true,{RESAMPLE}")
 
 
 def picture_path(audio_path):
@@ -125,19 +156,17 @@ def import_clip(url, name=None, start=None, end=None, normalize=True,
                 f"{info.get('channel') or info.get('uploader_id') or 'clip'}_{info.get('id', '')}"
         out = unique_path(folder, safe_name(name))
 
-        cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+        cut = []
         if start_s is not None:
-            cmd += ["-ss", f"{start_s:.3f}"]
-        cmd += ["-i", str(src)]
+            cut += ["-ss", f"{start_s:.3f}"]
+        cut += ["-i", str(src)]
         if end_s is not None:
-            cmd += ["-t", f"{end_s - (start_s or 0):.3f}"]
-        cmd += ["-vn", "-ac", "2", "-ar", "48000"]
-        if normalize:
-            cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
-        cmd += [str(out)]
+            cut += ["-t", f"{end_s - (start_s or 0):.3f}"]
         log("Cutting audio ...")
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        af = loudness_filter(ffmpeg, cut) if normalize else RESAMPLE
+        cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", *cut, "-vn", "-af", af,
+               "-ac", "2", "-ar", "48000", str(out)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, creationflags=_no_window())
         if proc.returncode != 0 or not out.exists():
             raise RuntimeError(proc.stderr.strip() or "ffmpeg failed")
         _save_thumbnail(info, out, log)

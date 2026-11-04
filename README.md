@@ -27,6 +27,15 @@ Optional: YouTube imports need [Node.js](https://nodejs.org) installed. Instagra
 - **Sliders:** **Mic** is your voice, **Clips** is how loud the clips are for others, **In your ears** is what you hear. **Send my voice** off means only clips go out.
 - **Theme** changes the colours (and the app's icon).
 
+## Best sound quality
+
+JondisBoard sends the cable the same clean signal you hear in your headphones. What your friends hear after that is decided by Discord or the game:
+
+- **Discord** → Voice & Video: **Noise Suppression off** (Krisp treats music as noise), **Echo Cancellation off**, **Automatic Gain Control off**, and set the input sensitivity by hand (or use push-to-talk).
+- **Windows** → Sound → CABLE Output → Properties: turn **Audio enhancements off** and leave the format at **48000 Hz**. In Sound → More sound settings → Communications, pick **Do nothing**.
+- **DayZ:** voice is mono, compressed and positional: it gets quieter and duller with distance and through helmets or gas masks. The server's `vonCodecQuality` sets how good it can sound (higher is better). If one friend suddenly hears you much worse than the others, them restarting their game helps (a known DayZ bug).
+- Keep **Clips** around 80–100 %: louder doesn't get through clearer, the game just squashes it.
+
 ## If something's off
 
 - **Nobody hears the clips:** check that Discord's / the game's input (or the Windows default mic) is still **CABLE Output**. Some headsets switch it back when they reconnect.
