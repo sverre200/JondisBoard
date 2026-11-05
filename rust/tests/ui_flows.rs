@@ -378,6 +378,52 @@ fn ui_flows() {
     check("and the toast says where it went", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("to Fresh finds")).unwrap_or(false)));
     window::pump(300);
 
+    // --- menus work from the keyboard
+    app(h, |a, _| a.show_group(ALL));
+    frame(h);
+    let gong_like = app(h, |a, _| a.visible()[0]);
+    let (gx, gy) = app(h, |a, _| tile_center(a, gong_like));
+    app(h, |a, _| a.right_click(gx, gy));
+    frame(h);
+    const DOWN: u32 = 0x28;
+    const ENTER: u32 = 0x0D;
+    app(h, |a, _| a.key_down(DOWN, false, false));
+    check("Down lights the first row of a menu", app(h, |a, _| a.menus.first().and_then(|m| m.hover).is_some()));
+    let first_label = app(h, |a, _| match a.menus[0].hover.and_then(|i| a.menus[0].items.get(i)) {
+        Some(MenuItem::Item { text, .. }) => text.clone(),
+        _ => String::new(),
+    });
+    app(h, |a, _| a.played.clear());
+    if first_label == "Play" {
+        app(h, |a, _| a.key_down(ENTER, false, false));
+        window::pump(80);
+        check("Enter runs the lit row", app(h, |a, _| a.menus.is_empty() && a.played == vec![gong_like]));
+    } else {
+        app(h, |a, _| a.close_menus());
+        println!("  (first clip-menu row is '{first_label}', Enter check skipped)");
+    }
+
+    // --- a name dialog doesn't vanish on an empty name
+    app(h, |a, _| a.run(Action::Rename(gong_like)));
+    app(h, |a, _| {
+        a.dialog.as_mut().unwrap().fields[0].set("   ");
+        a.dialog_ok();
+    });
+    check("an empty name keeps the dialog open and says why", app(h, |a, _| a.dialog.as_ref().map(|d| d.message.is_some()).unwrap_or(false)));
+    app(h, |a, _| a.close_dialog());
+    frame(h);
+
+    // --- sounds added in Explorer show up when the window comes back
+    let cfg_before = std::fs::metadata(lib.0.join("config.json")).unwrap().modified().unwrap();
+    app(h, |a, _| a.refresh_if_changed());
+    check("nothing changed on disk: no reload, no config write", std::fs::metadata(lib.0.join("config.json")).unwrap().modified().unwrap() == cfg_before);
+    tone(&lib.0.join("sounds/Dropped in.wav"), 0.5, 700.0);
+    app(h, |a, _| a.refresh_if_changed());
+    check("a file added outside the app appears", app(h, |a, _| a.id_of("Dropped in.wav").is_some()));
+    std::fs::remove_file(lib.0.join("sounds/Dropped in.wav")).unwrap();
+    app(h, |a, _| a.refresh_if_changed());
+    check("and goes when it's removed", app(h, |a, _| a.id_of("Dropped in.wav").is_none()));
+
     // --- the config keeps keys this version doesn't know
     check("unknown config keys survive", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("unknown_key"));
 

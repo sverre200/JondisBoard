@@ -28,6 +28,7 @@ pub const TIMER_CARET: usize = 3;
 pub const TIMER_DRAG: usize = 4;
 pub const TIMER_BENCH: usize = 5;
 pub const TIMER_SLOW: usize = 6;
+pub const TIMER_AUDIO_RETRY: usize = 7;
 
 const CLASS: PCWSTR = w!("JondisBoardMain");
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -694,6 +695,8 @@ fn handle(hwnd: HWND, st: &mut State, msg: u32, wp: WPARAM, lp: LPARAM) -> (Opti
                     app.deactivated();
                 } else {
                     app.update_typing();
+                    // sounds added, removed or edited in Explorer meanwhile show up now
+                    app.refresh_if_changed();
                 }
             }
             (None, false)
@@ -731,6 +734,10 @@ fn handle(hwnd: HWND, st: &mut State, msg: u32, wp: WPARAM, lp: LPARAM) -> (Opti
                     TIMER_SLOW => {
                         kill_timer(hwnd, TIMER_SLOW);
                         app.invalidate();
+                    }
+                    TIMER_AUDIO_RETRY => {
+                        kill_timer(hwnd, TIMER_AUDIO_RETRY);
+                        app.probe_audio();
                     }
                     _ => {}
                 }

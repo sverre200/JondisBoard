@@ -85,6 +85,14 @@ impl App {
             return;
         }
         let h = self.hit_at(x, y);
+        // the pointer takes over from the arrow keys
+        if h != self.hover {
+            if let Some(Hit::Menu(level, _)) = &h {
+                if let Some(m) = self.menus.get_mut(*level) {
+                    m.hover = None;
+                }
+            }
+        }
         // submenus open on hover; hovering another row of the parent closes them
         if let Some(Hit::Menu(level, i)) = &h {
             let (level, i) = (*level, *i);
@@ -692,6 +700,61 @@ impl App {
     // ---------------------------------------------------------------- keyboard
 
     /// A key press. Returns true if it was used.
+    /// Arrow keys walk the open menu (the deepest one), Enter picks, Right opens a submenu,
+    /// Left closes it. Returns whether the key was used. (Not Space: its WM_CHAR would still
+    /// type into a focused field.)
+    fn menu_key(&mut self, vk: u32) -> bool {
+        const UP: u32 = 0x26;
+        const DOWN: u32 = 0x28;
+        const LEFT: u32 = 0x25;
+        const RIGHT: u32 = 0x27;
+        const ENTER: u32 = 0x0D;
+        let level = self.menus.len() - 1;
+        let pickable = |it: &MenuItem| matches!(it, MenuItem::Item { enabled: true, .. } | MenuItem::Submenu { .. });
+        let m = &self.menus[level];
+        let rows: Vec<usize> = m.items.iter().enumerate().filter(|(_, it)| pickable(it)).map(|(i, _)| i).collect();
+        if rows.is_empty() {
+            return false;
+        }
+        // start from the row under the pointer, if any
+        let cur = m.hover.or(match &self.hover {
+            Some(Hit::Menu(l, i)) if *l == level => Some(*i),
+            _ => None,
+        });
+        match vk {
+            UP | DOWN => {
+                let pos = cur.and_then(|c| rows.iter().position(|r| *r == c));
+                let next = match (pos, vk == DOWN) {
+                    (None, true) => rows[0],
+                    (None, false) => rows[rows.len() - 1],
+                    (Some(p), true) => rows[(p + 1) % rows.len()],
+                    (Some(p), false) => rows[(p + rows.len() - 1) % rows.len()],
+                };
+                self.menus[level].hover = Some(next);
+                self.hover = None;
+            }
+            ENTER | RIGHT => {
+                let Some(i) = cur else { return vk != RIGHT };
+                let is_sub = matches!(self.menus[level].items.get(i), Some(MenuItem::Submenu { .. }));
+                if vk == RIGHT && !is_sub {
+                    return false;
+                }
+                if is_sub {
+                    self.open_submenu(level, i);
+                    if let Some(first) = self.menus.last().and_then(|m| m.items.iter().position(pickable)) {
+                        self.menus.last_mut().unwrap().hover = Some(first);
+                    }
+                } else {
+                    self.menu_click(level, i);
+                }
+            }
+            LEFT if level > 0 => self.truncate_menus(level),
+            _ => return false,
+        }
+        self.invalidate();
+        true
+    }
+
     pub fn key_down(&mut self, vk: u32, ctrl: bool, shift: bool) -> bool {
         const ESC: u32 = 0x1B;
         const ENTER: u32 = 0x0D;
@@ -699,6 +762,9 @@ impl App {
         let hwnd = self.hwnd;
         let get = move || shell::clipboard_text(hwnd);
         let set = move |s: &str| shell::set_clipboard_text(hwnd, s);
+        if !self.menus.is_empty() && self.menu_key(vk) {
+            return true;
+        }
         if self.dialog.is_some() {
             if !self.menus.is_empty() && vk == ESC {
                 self.close_menus();

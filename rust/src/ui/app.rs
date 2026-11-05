@@ -52,6 +52,8 @@ pub enum Msg {
     DialogImportStatus(&'static str),
     Picture(super::images::Decoded),
     AudioStarted(Result<Vec<String>, String>, Devices, [Option<String>; 3]),
+    /// after a device was lost: whether every configured device is present again
+    AudioProbe(bool),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -300,6 +302,10 @@ pub struct App {
     pub status: (String, Level),
     pub devices: Devices,
     pub audio_starting: bool,
+    /// a device stopped; the app reconnects by itself once it's back
+    pub audio_lost: bool,
+    /// the running start_audio is a quiet reconnect attempt
+    audio_retry: bool,
     pub progress: Vec<(u32, f32)>,
     pub playing: HashMap<u32, f32>,
     pub flash: HashMap<u32, (Instant, f32)>,
@@ -405,6 +411,8 @@ impl App {
             status: ("Starting audio…".into(), Level::Info),
             devices: Devices::default(),
             audio_starting: true,
+            audio_lost: false,
+            audio_retry: false,
             progress: Vec::new(),
             playing: HashMap::new(),
             flash: HashMap::new(),
@@ -576,6 +584,22 @@ impl App {
     }
 
     /// The tab shown: All while searching, else the chosen group.
+    /// Re-read sounds/ only if files or folders changed on disk (cheap: one directory scan, no
+    /// config write), e.g. when the window comes back to the front.
+    pub fn refresh_if_changed(&mut self) {
+        if self.drag.is_some() {
+            return;
+        }
+        let Ok(scan) = library::scan(&self.lib.sounds) else { return };
+        let same = scan.groups == self.groups
+            && scan.clips.len() == self.clips.len()
+            && scan.clips.iter().all(|f| self.id_of(&f.name).and_then(|id| self.clip(id)).map(|c| c.size == f.size && c.mtime == f.mtime).unwrap_or(false));
+        if !same {
+            crate::log::info("sounds folder changed on disk; reloading");
+            self.reload();
+        }
+    }
+
     pub fn view_key(&self) -> String {
         if !self.query.is_empty() {
             ALL.to_string()
@@ -767,9 +791,55 @@ impl App {
             .ok();
     }
 
+    /// A device stopped: look (off the UI thread) whether the configured devices are all there
+    /// again. Only then are the streams reopened, so a mic that still works isn't cut every few
+    /// seconds while the headphones are unplugged.
+    pub fn probe_audio(&mut self) {
+        if !self.audio_lost || self.audio_starting || test_mode() {
+            return;
+        }
+        let want = (self.cfg.mic.clone(), self.cfg.cable.clone(), self.cfg.monitor.clone());
+        let (tx, w) = (self.tx.clone(), self.waker);
+        std::thread::Builder::new()
+            .name("audio probe".into())
+            .spawn(move || {
+                let _com = wasapi::ComScope::mta();
+                let ins = wasapi::list(Kind::Input);
+                let outs = wasapi::list(Kind::Output);
+                let has = |list: &[wasapi::DeviceInfo], n: &Option<String>| n.as_ref().map(|n| list.iter().any(|d| &d.name == n)).unwrap_or(true);
+                let present = has(&ins, &want.0) && has(&outs, &want.1) && has(&outs, &want.2);
+                let _ = tx.send(Msg::AudioProbe(present));
+                w.wake();
+            })
+            .ok();
+    }
+
     pub fn audio_started(&mut self, r: Result<Vec<String>, String>, devices: Devices, chosen: [Option<String>; 3]) {
         self.audio_starting = false;
         self.devices = devices;
+        if std::mem::take(&mut self.audio_retry) {
+            // a quiet reconnect: it keeps trying only while the streams fail to open
+            match &r {
+                Err(_) => {
+                    self.set_status("Reconnecting audio…", Level::Warn);
+                    super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                    return self.invalidate();
+                }
+                Ok(w) => {
+                    self.audio_lost = false;
+                    crate::log::info("audio reconnected");
+                    if w.is_empty() {
+                        self.set_status("Live", Level::Good);
+                        self.toast("Audio is back.", Level::Info);
+                        return self.invalidate();
+                    }
+                    // opened, with a setup warning: shown the usual way below (once)
+                }
+            }
+        }
+        if r.is_ok() {
+            self.audio_lost = false; // Restart audio (or a new device pick) fixed it
+        }
         match r {
             Err(e) => {
                 crate::log::error(&format!("audio start failed: {e}"));
@@ -1285,7 +1355,7 @@ impl App {
         let link = shell::clipboard_text(self.hwnd).and_then(|t| importer::find_link(&t)).unwrap_or_default();
         let mut url = TextField::new("https://www.instagram.com/reel/...  or  https://youtu.be/...");
         url.set(&link);
-        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("From the start"), TextField::new("To the end")];
+        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("0:00"), TextField::new("Full length")];
         let g = self.cfg.group.clone();
         let group = if g == ALL || g == NO_GROUP { String::new() } else { g };
         self.open_dialog(DialogKind::Import { normalize: true, group, new_group: false, busy: false, started: None }, fields, 480.0);
@@ -1336,11 +1406,12 @@ impl App {
             }
             DialogKind::Text { action, .. } => {
                 let text = d.fields[0].text.trim().to_string();
+                if text.is_empty() {
+                    d.message = Some(("Type a name first.".into(), WARN));
+                    return self.invalidate();
+                }
                 let a = action.clone();
                 self.close_dialog();
-                if text.is_empty() {
-                    return;
-                }
                 match a {
                     TextAction::NewGroup(with) => self.new_group(&text, with),
                     TextAction::RenameGroup(g) => self.rename_group(&g, &text),
@@ -1567,8 +1638,23 @@ impl App {
                     }
                 }
                 Msg::Engine(Event::DeviceLost) => {
-                    self.set_status("Check audio setup", Level::Warn);
-                    self.toast("An audio device stopped (unplugged?). Pick it again or press Restart audio in Settings.", Level::Warn);
+                    if !self.audio_lost {
+                        self.audio_lost = true;
+                        crate::log::warn("an audio device stopped; reconnecting when it's back");
+                        self.set_status("Reconnecting audio…", Level::Warn);
+                        self.toast("An audio device stopped (unplugged?). It reconnects by itself when it's back.", Level::Warn);
+                    }
+                    super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                }
+                Msg::AudioProbe(present) => {
+                    if !self.audio_lost || self.audio_starting {
+                        // fixed by hand meanwhile, or a start is already running
+                    } else if present {
+                        self.audio_retry = true;
+                        self.start_audio();
+                    } else {
+                        super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                    }
                 }
                 Msg::Engine(Event::StoppedAll) => {
                     self.poll_progress();
@@ -1651,6 +1737,9 @@ fn finish_import(imp: importer::Imported) -> PathBuf {
 pub fn test_mode() -> bool {
     std::env::var_os("JONDISBOARD_TEST").is_some()
 }
+
+/// How often a lost audio device is looked for.
+const AUDIO_RETRY_MS: u32 = 3000;
 
 fn cfg_budget(_cfg: &Config) -> usize {
     // decoded audio kept in memory: 1 GiB (about 90 minutes of 16-bit stereo). Clips past the
