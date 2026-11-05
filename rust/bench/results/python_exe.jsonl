@@ -1,0 +1,6 @@
+{"visible_ms": 2772, "settled_ms": 4031, "idle_cpu_pct": 3.75, "ws_mb": 183.0, "private_mb": 636.6, "run": "cold", "exe": "JondisBoard.exe", "sounds": "100"}
+{"visible_ms": 2623, "settled_ms": 4082, "idle_cpu_pct": 5.0, "ws_mb": 182.7, "private_mb": 636.6, "run": "warm", "exe": "JondisBoard.exe", "sounds": "100"}
+{"visible_ms": 5386, "settled_ms": 9864, "idle_cpu_pct": 3.281, "ws_mb": 597.7, "private_mb": 1054.2, "run": "cold", "exe": "JondisBoard.exe", "sounds": "500"}
+{"visible_ms": 4727, "settled_ms": 7344, "idle_cpu_pct": 3.75, "ws_mb": 592.2, "private_mb": 1048.8, "run": "warm", "exe": "JondisBoard.exe", "sounds": "500"}
+{"visible_ms": 7313, "settled_ms": 11893, "idle_cpu_pct": 6.094, "ws_mb": 1102.5, "private_mb": 1562.5, "run": "cold", "exe": "JondisBoard.exe", "sounds": "1000"}
+{"visible_ms": 8032, "settled_ms": 13016, "idle_cpu_pct": 4.844, "ws_mb": 1099.9, "private_mb": 1562.0, "run": "warm", "exe": "JondisBoard.exe", "sounds": "1000"}
