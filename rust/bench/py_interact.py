@@ -45,6 +45,24 @@ A.ctk.set_appearance_mode("dark")
 res = {"sounds": lib.name}
 
 
+def watchdog():
+    # the Python app sometimes never finishes its rebuilt window at 1,000 sounds: report what
+    # was measured, with the theme switch marked as not finished within the limit
+    import os
+    import threading
+    import time as _t
+
+    def fire():
+        res.pop("_theme_t0", None)
+        res.setdefault("theme_ms", "did not finish in 240 s")
+        print(json.dumps(res), flush=True)
+        os._exit(2)
+    threading.Timer(240, fire).start()
+
+
+watchdog()
+
+
 def run_window(on_ready):
     root = A.ctk.CTk()
     t0 = time.perf_counter()

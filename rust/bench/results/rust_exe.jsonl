@@ -1,0 +1,12 @@
+{"visible_ms": 112, "settled_ms": 516, "idle_cpu_pct": 3.125, "ws_mb": 55.6, "private_mb": 52.2, "run": "cold", "exe": "JondisBoard.exe", "sounds": "20"}
+{"visible_ms": 47, "settled_ms": 350, "idle_cpu_pct": 1.094, "ws_mb": 55.3, "private_mb": 52.0, "run": "warm", "exe": "JondisBoard.exe", "sounds": "20"}
+{"visible_ms": 27, "settled_ms": 330, "idle_cpu_pct": 0.312, "ws_mb": 55.3, "private_mb": 52.1, "run": "warm", "exe": "JondisBoard.exe", "sounds": "20"}
+{"visible_ms": 177, "settled_ms": 328, "idle_cpu_pct": 0.469, "ws_mb": 93.4, "private_mb": 89.8, "run": "cold", "exe": "JondisBoard.exe", "sounds": "100"}
+{"visible_ms": 40, "settled_ms": 343, "idle_cpu_pct": 0.469, "ws_mb": 92.8, "private_mb": 89.3, "run": "warm", "exe": "JondisBoard.exe", "sounds": "100"}
+{"visible_ms": 43, "settled_ms": 345, "idle_cpu_pct": 0.469, "ws_mb": 92.8, "private_mb": 89.2, "run": "warm", "exe": "JondisBoard.exe", "sounds": "100"}
+{"visible_ms": 396, "settled_ms": 799, "idle_cpu_pct": 0.781, "ws_mb": 287.9, "private_mb": 284.9, "run": "cold", "exe": "JondisBoard.exe", "sounds": "500"}
+{"visible_ms": 97, "settled_ms": 400, "idle_cpu_pct": 0.156, "ws_mb": 286.6, "private_mb": 284.0, "run": "warm", "exe": "JondisBoard.exe", "sounds": "500"}
+{"visible_ms": 104, "settled_ms": 407, "idle_cpu_pct": 0.781, "ws_mb": 288.0, "private_mb": 285.1, "run": "warm", "exe": "JondisBoard.exe", "sounds": "500"}
+{"visible_ms": 505, "settled_ms": 1161, "idle_cpu_pct": 0.469, "ws_mb": 530.7, "private_mb": 528.9, "run": "cold", "exe": "JondisBoard.exe", "sounds": "1000"}
+{"visible_ms": 150, "settled_ms": 704, "idle_cpu_pct": 0.312, "ws_mb": 530.6, "private_mb": 529.3, "run": "warm", "exe": "JondisBoard.exe", "sounds": "1000"}
+{"visible_ms": 146, "settled_ms": 700, "idle_cpu_pct": 0.937, "ws_mb": 528.8, "private_mb": 527.5, "run": "warm", "exe": "JondisBoard.exe", "sounds": "1000"}

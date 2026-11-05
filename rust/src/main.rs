@@ -4,6 +4,7 @@
 //!   JondisBoard.exe --data-dir <folder>  use another folder's sounds/ and config.json
 //!   JondisBoard.exe --bench <out.json>   scripted performance run (throwaway libraries only)
 //!   JondisBoard.exe --audio-check [...]  audio diagnostics (see diag.rs)
+//!   JondisBoard.exe --import-file reels.txt [--group G]   bulk import (url | name | start | end)
 #![windows_subsystem = "windows"]
 
 use jondisboard::{log, paths::Paths, ui};
@@ -23,6 +24,9 @@ fn main() {
     std::panic::set_hook(Box::new(|info| {
         log::error(&format!("crash: {info}"));
     }));
+    if args.iter().any(|a| a == "--import-file") {
+        std::process::exit(jondisboard::diag::bulk_import(&paths, &args));
+    }
     if args.iter().any(|a| a == "--audio-check") {
         std::process::exit(jondisboard::diag::main(&paths, &args));
     }

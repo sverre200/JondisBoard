@@ -1,0 +1,110 @@
+{
+  "decode_all_ms": 0.0,
+  "decode_thread_ms": 455.0,
+  "decoded_mb": 457.0,
+  "drag_ms": {
+    "build": {
+      "max": 1.63,
+      "median": 1.43,
+      "n": 61,
+      "p95": 1.51
+    },
+    "fps": 144.0,
+    "frame": {
+      "max": 8.69,
+      "median": 6.96,
+      "n": 61,
+      "p95": 7.78
+    }
+  },
+  "group_switch_ms": {
+    "build": {
+      "max": 1.67,
+      "median": 1.47,
+      "n": 18,
+      "p95": 1.67
+    },
+    "frame": {
+      "max": 7.46,
+      "median": 5.91,
+      "n": 18,
+      "p95": 7.46
+    }
+  },
+  "groups": 6,
+  "memory_after_decode_mb": {
+    "private": 554.0,
+    "working_set": 533.0
+  },
+  "memory_at_start_mb": {
+    "private": 528.0,
+    "working_set": 529.0
+  },
+  "mixer_cost": {
+    "block_frames": 480,
+    "us": {
+      "max": 19.8,
+      "median": 1.6,
+      "n": 2000,
+      "p95": 2.3
+    },
+    "voices": 8
+  },
+  "resize_step_ms": {
+    "max": 7.57,
+    "median": 4.95,
+    "n": 20,
+    "p95": 7.57
+  },
+  "scroll_ms": {
+    "build": {
+      "max": 1.69,
+      "median": 1.46,
+      "n": 40,
+      "p95": 1.66
+    },
+    "frame": {
+      "max": 8.61,
+      "median": 6.95,
+      "n": 40,
+      "p95": 8.52
+    }
+  },
+  "search_ms": {
+    "build": {
+      "max": 2.03,
+      "median": 1.71,
+      "n": 4,
+      "p95": 2.03
+    },
+    "clear_build": 1.6137999296188354,
+    "clear_frame": 6.3058000000000005,
+    "frame": {
+      "max": 8.0,
+      "median": 7.46,
+      "n": 4,
+      "p95": 8.0
+    }
+  },
+  "sounds": 1000,
+  "startup": {
+    "audio started": 232.7,
+    "first frame": 212.4,
+    "library scanned": 139.9,
+    "window created": 140.5
+  },
+  "theme_switch_ms": {
+    "build": {
+      "max": 1.76,
+      "median": 1.62,
+      "n": 6,
+      "p95": 1.76
+    },
+    "click_to_frame": {
+      "max": 8.5,
+      "median": 6.92,
+      "n": 6,
+      "p95": 8.5
+    }
+  }
+}

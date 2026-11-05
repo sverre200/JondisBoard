@@ -591,3 +591,64 @@ mod tests {
         assert!(r.iter().all(|(_, v)| v.abs() < 0.5 || true));
     }
 }
+
+/// `JondisBoard.exe --import-file reels.txt [--group <name>]`: bulk import (importer.py --file).
+pub fn bulk_import(paths: &Paths, args: &[String]) -> i32 {
+    // SAFETY: plain call.
+    unsafe {
+        let _ = windows::Win32::System::Console::AttachConsole(windows::Win32::System::Console::ATTACH_PARENT_PROCESS);
+    }
+    let arg = |n: &str| args.iter().position(|a| a == n).and_then(|i| args.get(i + 1)).cloned();
+    let Some(file) = arg("--import-file") else { return 1 };
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        println!("can't read {file}");
+        return 1;
+    };
+    let cfg = ConfigFile::new(paths.config()).load().0;
+    let folder = match arg("--group") {
+        Some(g) => paths.sounds().join(crate::library::safe_name(&g)),
+        None => paths.sounds(),
+    };
+    let tools = crate::importer::Tools { yt_dlp: paths.yt_dlp(), ffmpeg: paths.ffmpeg() };
+    let _com = wasapi::ComScope::mta();
+    let mut failed = 0;
+    for line in text.lines() {
+        let job = match crate::importer::parse_bulk_line(line) {
+            None => continue,
+            Some(Err(e)) => {
+                println!("FAILED {line}: {e}");
+                failed += 1;
+                continue;
+            }
+            Some(Ok(j)) => j,
+        };
+        let req = crate::importer::Request {
+            url: job.0.clone(),
+            name: job.1,
+            start: job.2,
+            end: job.3,
+            normalize: true,
+            cookies_from_browser: cfg.cookies_from_browser.clone(),
+            folder: folder.clone(),
+        };
+        println!("Downloading {} ...", job.0);
+        match crate::importer::import_clip(&req, &tools, &|_| {}) {
+            Ok(imp) => {
+                if let Some(t) = &imp.thumbnail {
+                    let _ = crate::ui::images::save_picture_from_file(t, &crate::library::picture_path(&imp.audio));
+                }
+                let _ = std::fs::remove_dir_all(&imp.temp);
+                println!("Saved {}", imp.audio.display());
+            }
+            Err(e) => {
+                println!("FAILED {}: {e}", job.0);
+                failed += 1;
+            }
+        }
+    }
+    if failed > 0 {
+        1
+    } else {
+        0
+    }
+}

@@ -108,6 +108,7 @@ fn snapshots() {
     let h = window::create(Paths::new(Some(lib.clone())), Instant::now(), None).expect("window");
     settle(h, 600);
     snap(h, &dir, "01_board");
+    window::snapshot_at(h, &dir.join("01_board_150pct.png"), Some(144)).unwrap();
 
     // playing + flash
     let bruh = app(h, |a, _| a.id_of("Memes/Bruh.wav").unwrap());

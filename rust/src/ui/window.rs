@@ -235,16 +235,23 @@ pub fn with_app<R>(hwnd: HWND, f: impl FnOnce(&mut App, &mut Gfx) -> R) -> Optio
 
 /// Tests: draw the current state into a PNG (offscreen: nothing appears on screen).
 pub fn snapshot(hwnd: HWND, path: &std::path::Path) -> Result<(), String> {
+    snapshot_at(hwnd, path, None)
+}
+
+/// Tests: like `snapshot`, drawn as if the screen were at `dpi` (e.g. 144 = 150 %).
+pub fn snapshot_at(hwnd: HWND, path: &std::path::Path, dpi: Option<u32>) -> Result<(), String> {
     let win = win_of(hwnd).ok_or("no window")?;
     let mut st = win.state.try_borrow_mut().map_err(|_| "busy")?;
     let st = &mut *st;
-    let dpi = st.dpi;
+    let dpi = dpi.unwrap_or(st.dpi);
     let mut rc = RECT::default();
     // SAFETY: plain query on our window.
     unsafe {
         let _ = GetClientRect(hwnd, &mut rc);
     }
-    let mut c = Canvas::offscreen(&st.gfx, (rc.right - rc.left).max(1) as u32, (rc.bottom - rc.top).max(1) as u32, dpi).map_err(|e| e.message())?;
+    let k = dpi as f32 / st.dpi as f32;
+    let (w, h) = (((rc.right - rc.left) as f32 * k) as u32, ((rc.bottom - rc.top) as f32 * k) as u32);
+    let mut c = Canvas::offscreen(&st.gfx, w.max(1), h.max(1), dpi).map_err(|e| e.message())?;
     let app = st.app.as_mut().ok_or("no app")?;
     // the pictures it has decoded so far
     app.pic_failed.clear();
@@ -717,8 +724,8 @@ fn handle(hwnd: HWND, st: &mut State, msg: u32, wp: WPARAM, lp: LPARAM) -> (Opti
                         }
                     }
                     TIMER_BENCH => {
-                        if let Some(b) = st.bench.as_mut() {
-                            b.tick(hwnd, app, &mut st.gfx);
+                        if let (Some(b), Some(c)) = (st.bench.as_mut(), st.canvas.as_mut()) {
+                            b.tick(hwnd, app, c, &mut st.gfx);
                         }
                     }
                     TIMER_SLOW => {

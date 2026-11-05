@@ -1,0 +1,4 @@
+{"sounds": "20", "startup_ms": 1077, "group_ms": 32.3, "group_max_ms": 139.7, "search_ms": 25.9, "search_clear_ms": 37.2, "resize_ms": 265.1, "theme_ms": 1332}
+{"sounds": "100", "startup_ms": 1728, "group_ms": 63.7, "group_max_ms": 143.0, "search_ms": 68.7, "search_clear_ms": 75.7, "resize_ms": 519.6, "theme_ms": 2053}
+{"sounds": "500", "startup_ms": 4769, "group_ms": 59.8, "group_max_ms": 163.8, "search_ms": 281.1, "search_clear_ms": 299.9, "resize_ms": 1594.4, "theme_ms": 5458}
+{"sounds": "1000", "startup_ms": 4921, "group_ms": 96.5, "group_max_ms": 190.0, "search_ms": 723.0, "search_clear_ms": 859.7, "resize_ms": 7605.4, "theme_ms": 9735}

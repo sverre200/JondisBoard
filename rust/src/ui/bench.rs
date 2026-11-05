@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::Graphics::Gdi::{RedrawWindow, RDW_INVALIDATE, RDW_UPDATENOW};
+use super::gfx::Canvas;
 use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
@@ -42,14 +42,11 @@ fn stats(v: &[f64]) -> Value {
     json!({"median": (med * 100.0).round() / 100.0, "p95": (p95 * 100.0).round() / 100.0, "max": (s[s.len() - 1] * 100.0).round() / 100.0, "n": s.len()})
 }
 
-/// Repaint now; returns (frame ms incl. present, build ms).
-fn frame(hwnd: HWND, app: &mut App) -> (f64, f64) {
+/// Draw one frame now; returns (ms including handing it to Windows, ms to build it).
+fn frame(app: &mut App, c: &mut Canvas, g: &mut Gfx) -> (f64, f64) {
     app.frame_times.clear();
     let t = Instant::now();
-    // SAFETY: synchronous repaint of our own window.
-    unsafe {
-        let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_UPDATENOW);
-    }
+    app.paint(c, g);
     let total = t.elapsed().as_secs_f64() * 1000.0;
     let build = app.frame_times.first().copied().unwrap_or(0.0) as f64;
     (total, build)
@@ -94,7 +91,7 @@ impl Bench {
 
     pub fn after_frame(&mut self, _app: &mut App, _g: &mut Gfx) {}
 
-    pub fn tick(&mut self, hwnd: HWND, app: &mut App, _g: &mut Gfx) {
+    pub fn tick(&mut self, hwnd: HWND, app: &mut App, c: &mut Canvas, g: &mut Gfx) {
         let Some(t0) = self.started else { return };
         match self.step {
             0 => {
@@ -113,11 +110,11 @@ impl Bench {
                 // group switches: every tab, twice
                 let keys: Vec<String> = app.tabs().into_iter().map(|t| t.0).collect();
                 let (mut fr, mut bu) = (Vec::new(), Vec::new());
-                frame(hwnd, app);
+                frame(app, c, g);
                 for _ in 0..2 {
                     for k in keys.iter().chain(std::iter::once(&crate::config::ALL.to_string())) {
                         app.show_group(k);
-                        let (f, b) = frame(hwnd, app);
+                        let (f, b) = frame(app, c, g);
                         fr.push(f);
                         bu.push(b);
                     }
@@ -130,12 +127,12 @@ impl Bench {
                 app.search_focused = true;
                 for ch in "bruh".chars() {
                     app.char_typed(ch);
-                    let (f, b) = frame(hwnd, app);
+                    let (f, b) = frame(app, c, g);
                     fr.push(f);
                     bu.push(b);
                 }
                 app.key_down(0x1B, false, false);
-                let (f, b) = frame(hwnd, app);
+                let (f, b) = frame(app, c, g);
                 app.search_focused = false;
                 self.results.insert("search_ms".into(), json!({"frame": stats(&fr), "build": stats(&bu), "clear_frame": f, "clear_build": b}));
             }
@@ -145,7 +142,7 @@ impl Bench {
                 let (mut fr, mut bu) = (Vec::new(), Vec::new());
                 for i in 0..40 {
                     app.wheel(if i < 20 { -120.0 } else { 120.0 });
-                    let (f, b) = frame(hwnd, app);
+                    let (f, b) = frame(app, c, g);
                     fr.push(f);
                     bu.push(b);
                 }
@@ -161,20 +158,19 @@ impl Bench {
                     app.down = Some(super::view::Hit::Tile(id));
                     app.down_pos = (x0, y0);
                     let (mut fr, mut bu) = (Vec::new(), Vec::new());
-                    let mut g = Gfx::new().expect("gfx");
-                    for i in 0..=60 {
+                        for i in 0..=60 {
                         let k = i as f32 / 60.0;
                         let x = x0 + (board.right() - 60.0 - x0) * k;
                         let y = y0 + (board.y + board.h * 0.6 - y0) * k;
-                        app.mouse_move(&mut g, x, y);
-                        let (f, b) = frame(hwnd, app);
+                        app.mouse_move(g, x, y);
+                        let (f, b) = frame(app, c, g);
                         fr.push(f);
                         bu.push(b);
                     }
                     app.cancel_drag();
                     let mut settle = 0;
                     while app.dirty && settle < 30 {
-                        frame(hwnd, app);
+                        frame(app, c, g);
                         settle += 1;
                     }
                     let fps = 1000.0 / (fr.iter().sum::<f64>() / fr.len() as f64);
@@ -189,7 +185,7 @@ impl Bench {
                 for n in names.iter().filter(|n| **n != start).chain(std::iter::once(&start)) {
                     let t = Instant::now();
                     app.set_theme(n);
-                    let (_, b) = frame(hwnd, app);
+                    let (_, b) = frame(app, c, g);
                     fr.push(t.elapsed().as_secs_f64() * 1000.0);
                     bu.push(b);
                 }
@@ -214,6 +210,7 @@ impl Bench {
                 let t = Instant::now();
                 app.player.wait_idle(Duration::from_secs(60));
                 self.results.insert("decode_all_ms".into(), json!((t.elapsed().as_secs_f64() * 1000.0).round()));
+                self.results.insert("decode_thread_ms".into(), json!((app.player.decode_ns.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1e6).round()));
                 self.results.insert("decoded_mb".into(), json!((app.player.cached_bytes() as f64 / 1048576.0).round()));
                 let (ws, private) = memory();
                 self.results.insert("memory_after_decode_mb".into(), json!({"working_set": ws.round(), "private": private.round()}));

@@ -376,3 +376,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+/// One line of a bulk-import file: `url | name | start | end` (name/start/end optional).
+pub fn parse_bulk_line(line: &str) -> Option<Result<(String, Option<String>, Option<f64>, Option<f64>), String>> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let mut parts: Vec<&str> = line.split('|').map(str::trim).collect();
+    parts.resize(4, "");
+    let name = (!parts[1].is_empty()).then(|| parts[1].to_string());
+    Some(match (parse_time(parts[2]), parse_time(parts[3])) {
+        (Ok(s), Ok(e)) => Ok((parts[0].to_string(), name, s, e)),
+        (Err(e), _) | (_, Err(e)) => Err(e),
+    })
+}
+
+#[cfg(test)]
+mod bulk_tests {
+    use super::*;
+
+    #[test]
+    fn bulk_lines() {
+        assert!(parse_bulk_line("# comment").is_none());
+        assert!(parse_bulk_line("   ").is_none());
+        let (u, n, s, e) = parse_bulk_line("https://x/reel/A/ | battle cry | 0:01 | 0:04").unwrap().unwrap();
+        assert_eq!((u.as_str(), n.as_deref(), s, e), ("https://x/reel/A/", Some("battle cry"), Some(1.0), Some(4.0)));
+        let (_, n, s, e) = parse_bulk_line("https://x/reel/B/ | laugh").unwrap().unwrap();
+        assert_eq!((n.as_deref(), s, e), (Some("laugh"), None, None));
+        assert!(parse_bulk_line("u | n | nope").unwrap().is_err());
+    }
+}

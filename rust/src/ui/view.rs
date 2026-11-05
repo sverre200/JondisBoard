@@ -245,6 +245,10 @@ impl App {
         self.drag_ghost(c, g);
         self.toasts(c, g);
         self.dialogs(c, g);
+        if self.record_frames {
+            // the CPU time to build the frame (handing it to Windows comes next)
+            self.frame_times.push(t0.elapsed().as_secs_f32() * 1000.0);
+        }
         if !c.end() {
             // device lost: the window makes a new render target on the next paint
             c.gen = u64::MAX;
@@ -256,9 +260,6 @@ impl App {
         }
         self.dirty = self.anim.active();
         self.slow_anim = self.anim.slow();
-        if self.record_frames {
-            self.frame_times.push(t0.elapsed().as_secs_f32() * 1000.0);
-        }
         let _ = t;
     }
 
@@ -314,7 +315,7 @@ impl App {
 
     fn toolbar(&mut self, c: &mut Canvas, g: &mut Gfx, w: f32) {
         let t = self.theme();
-        let y = 78.0;
+        let y = 82.0;
         let mut x = 24.0;
         let r = self.button(c, g, x, y, 0.0, 36.0, "Quick import", Some(Icon::Bolt), Kind::Primary, Hit::QuickImport, false);
         x = r.right() + 8.0;
@@ -354,7 +355,7 @@ impl App {
         let tabs = self.tabs();
         let current = self.view_key();
         let drop_tab = self.drag.as_ref().and_then(|d| d.tab.clone());
-        let (mut x, mut y) = (24.0, 124.0);
+        let (mut x, mut y) = (24.0, 128.0);
         let max_x = w - 24.0;
         for (k, label, n) in tabs {
             let tw = self.tab_width(g, &k, &label, n);
@@ -416,7 +417,7 @@ impl App {
         let cx = r.x + (r.w - lw - 22.0) / 2.0;
         icons::draw(c, g, Icon::Plus, cx + 2.0, r.cy() - 5.0, 10.0, t.muted);
         c.text(g, cx + 22.0, r.cy() - 9.0, "New group", 13.0, Weight::Normal, 0.0, 1, Align::Left, t.muted);
-        y + 36.0 + 6.0
+        y + 36.0 + 13.0
     }
 
     // ---------------------------------------------------------------- board
