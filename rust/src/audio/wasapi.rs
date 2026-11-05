@@ -294,6 +294,12 @@ pub fn start_output(dev: &DeviceInfo, mut mixer: OutputMixer, on_fail: Box<dyn F
 
 /// Start capturing a mic (mono) into `ring`.
 pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() + Send>) -> Result<Stream, String> {
+    start_capture(dev, 1, Box::new(move |x: &[f32]| ring.write(x)), on_fail)
+}
+
+/// Capture `channels` interleaved float channels; `sink` gets every packet (on the capture
+/// thread, so it must not block).
+pub fn start_capture(dev: &DeviceInfo, channels: u16, mut sink: Box<dyn FnMut(&[f32]) + Send>, on_fail: Box<dyn Fn() + Send>) -> Result<Stream, String> {
     let stop = Arc::new(AtomicBool::new(false));
     let stats = Arc::new(StreamStats::default());
     let (tx, rx) = mpsc::channel::<Result<(), String>>();
@@ -309,7 +315,7 @@ pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() +
                 // SAFETY: COM activation and initialisation with a valid format struct.
                 unsafe {
                     let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
-                    let fmt = format(1);
+                    let fmt = format(channels);
                     client.Initialize(
                         AUDCLNT_SHAREMODE_SHARED,
                         AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
@@ -336,7 +342,7 @@ pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() +
                 }
             };
             let _mm = Mmcss::pro_audio();
-            let zeros = vec![0.0f32; SR as usize];
+            let zeros = vec![0.0f32; SR as usize * channels as usize];
             while !stop2.load(Ordering::Relaxed) {
                 // SAFETY: waiting on our own event handle.
                 let w = unsafe { WaitForSingleObject(ev.0, 200) };
@@ -344,7 +350,7 @@ pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() +
                     continue;
                 }
                 // SAFETY: COM calls on the live client; the packet pointer is valid for `frames`
-                // mono f32 samples until ReleaseBuffer.
+                // frames of `channels` f32 samples until ReleaseBuffer.
                 let res = unsafe {
                     (|| -> windows::core::Result<()> {
                         loop {
@@ -359,15 +365,16 @@ pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() +
                             if flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32 != 0 {
                                 stats2.overflows.fetch_add(1, Ordering::Relaxed);
                             }
+                            let total = frames as usize * channels as usize;
                             if flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || p.is_null() {
-                                let mut left = frames as usize;
+                                let mut left = total;
                                 while left > 0 {
                                     let k = left.min(zeros.len());
-                                    ring.write(&zeros[..k]);
+                                    sink(&zeros[..k]);
                                     left -= k;
                                 }
                             } else {
-                                ring.write(std::slice::from_raw_parts(p as *const f32, frames as usize));
+                                sink(std::slice::from_raw_parts(p as *const f32, total));
                             }
                             cap.ReleaseBuffer(frames)?;
                         }
@@ -393,7 +400,7 @@ pub fn start_input(dev: &DeviceInfo, ring: Arc<MicRing>, on_fail: Box<dyn Fn() +
         }
         Err(_) => {
             stop.store(true, Ordering::Relaxed);
-            Err("the microphone didn't respond".into())
+            Err("the recording device didn't respond".into())
         }
     }
 }

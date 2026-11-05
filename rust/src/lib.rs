@@ -4,9 +4,11 @@
 //! hotkey matching) can be unit-tested without opening windows or devices.
 pub mod audio;
 pub mod config;
+pub mod diag;
 pub mod hotkeys;
 pub mod importer;
 pub mod library;
 pub mod log;
 pub mod paths;
 pub mod theme;
+pub mod ui;

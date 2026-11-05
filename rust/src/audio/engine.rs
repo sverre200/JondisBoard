@@ -214,6 +214,10 @@ impl Player {
         s.cable.as_ref().or(s.monitor.as_ref()).map(|o| o.control.state.clone()).unwrap_or_else(|| self.idle.clone())
     }
 
+    pub fn is_playing_any(&self) -> bool {
+        self.state().count.load(Ordering::Acquire) > 0
+    }
+
     pub fn is_playing(&self, id: u32) -> bool {
         self.state().is_playing(id)
     }

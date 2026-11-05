@@ -73,6 +73,7 @@ dependencies = [
  "embed-resource",
  "serde_json",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]
