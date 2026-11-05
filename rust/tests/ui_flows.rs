@@ -424,6 +424,20 @@ fn ui_flows() {
     app(h, |a, _| a.refresh_if_changed());
     check("and goes when it's removed", app(h, |a, _| a.id_of("Dropped in.wav").is_none()));
 
+    // --- Add files / files dropped from Explorer: into the open group, with feedback
+    let outside = std::env::temp_dir().join(format!("jb_ui_drop_{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    tone(&outside.join("Picked.wav"), 0.5, 520.0);
+    std::fs::write(outside.join("notes.txt"), b"not a sound").unwrap();
+    app(h, |a, _| {
+        a.show_group("Memes");
+        a.add_paths(&[outside.join("Picked.wav"), outside.join("notes.txt")]);
+    });
+    check("an added sound goes into the open group", lib.0.join("sounds/Memes/Picked.wav").exists() && app(h, |a, _| a.id_of("Memes/Picked.wav").is_some()));
+    check("a non-sound file isn't copied in", !lib.0.join("sounds/Memes/notes.txt").exists());
+    check("and the toast says both", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("Added 1 to Memes") && t.text.contains("notes.txt")).unwrap_or(false)));
+    let _ = std::fs::remove_dir_all(&outside);
+
     // --- the config keeps keys this version doesn't know
     check("unknown config keys survive", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("unknown_key"));
 

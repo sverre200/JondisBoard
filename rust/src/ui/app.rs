@@ -1138,12 +1138,39 @@ impl App {
         if files.is_empty() {
             return;
         }
+        self.add_paths(&files);
+    }
+
+    /// Copy picked files into the open group (No group on All) and show the result.
+    pub fn add_paths(&mut self, files: &[PathBuf]) {
+        let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = files.iter().cloned().partition(|p| library::is_audio(p));
         let folder = self.current_folder();
-        let results = self.lib.add_files(&files, &folder);
-        let errors: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
+        let results = self.lib.add_files(&audio, &folder);
+        let mut errors: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
+        if !other.is_empty() {
+            let names: Vec<String> = other.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+            errors.push(format!("{} isn't a sound file", names.join(", ")));
+        }
+        let added: Vec<String> = results.into_iter().filter_map(Result::ok).collect();
         self.reload();
-        if !errors.is_empty() {
-            self.toast(&format!("Couldn't add: {}", errors.join("; ")), Level::Warn);
+        for n in &added {
+            if let Some(id) = self.id_of(n) {
+                self.flash_tile(id, 0.32);
+            }
+        }
+        if let Some(id) = added.last().and_then(|n| self.id_of(n)) {
+            self.scroll_to_clip(id);
+        }
+        let g = self.cfg.group.clone();
+        let place = if g == ALL || g == NO_GROUP { String::new() } else { format!(" to {g}") };
+        match (added.len(), errors.is_empty()) {
+            (_, false) => {
+                let lead = if added.is_empty() { String::new() } else { format!("Added {}{place}. ", added.len()) };
+                self.toast(&format!("{lead}Couldn't add: {}", errors.join("; ")), Level::Warn)
+            }
+            (0, true) => {}
+            (1, true) => self.toast(&format!("Added '{}'{place}", library::stem_of(&added[0])), Level::Info),
+            (n, true) => self.toast(&format!("Added {n} sounds{place}"), Level::Info),
         }
     }
 

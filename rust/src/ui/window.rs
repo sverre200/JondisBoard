@@ -20,6 +20,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const TIMER_TOAST: usize = 1;
@@ -320,6 +321,8 @@ pub fn create(paths: Paths, started: Instant, bench: Option<super::bench::Bench>
         let (tx, rx) = mpsc::channel();
         let mut app = App::new(hwnd, paths, tx, rx, started);
         app.icons = apply_theme_chrome(hwnd, app.themes.get());
+        // sound files dropped from Explorer are added like Add files
+        DragAcceptFiles(hwnd, true);
         app.mark("window created");
         {
             let mut st = win.state.borrow_mut();
@@ -685,6 +688,29 @@ fn handle(hwnd: HWND, st: &mut State, msg: u32, wp: WPARAM, lp: LPARAM) -> (Opti
                     if !ch.is_control() {
                         app.char_typed(ch);
                     }
+                }
+            }
+            done(0)
+        }
+        WM_DROPFILES => {
+            let drop = HDROP(wp.0 as *mut _);
+            // SAFETY: the HDROP Windows handed us, read then released once.
+            let files: Vec<std::path::PathBuf> = unsafe {
+                let n = DragQueryFileW(drop, u32::MAX, None);
+                let files = (0..n)
+                    .filter_map(|i| {
+                        let len = DragQueryFileW(drop, i, None) as usize;
+                        let mut buf = vec![0u16; len + 1];
+                        let got = DragQueryFileW(drop, i, Some(&mut buf)) as usize;
+                        (got > 0).then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buf[..got])))
+                    })
+                    .collect();
+                DragFinish(drop);
+                files
+            };
+            if let Some(app) = st.app.as_mut() {
+                if app.dialog.is_none() && !files.is_empty() {
+                    app.add_paths(&files);
                 }
             }
             done(0)
