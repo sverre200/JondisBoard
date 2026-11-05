@@ -241,10 +241,17 @@ impl App {
         self.board(c, g, Rect::new(16.0, tabs_bottom, w - 26.0, footer_y - tabs_bottom));
         self.footer(c, g, w, footer_y);
         self.settings_panel(c, g);
-        self.draw_menus(c, g);
+        // a dialog's own menu (its Group dropdown) goes over the dialog, the rest under its scrim
+        let menus_over_dialog = self.dialog.is_some();
+        if !menus_over_dialog {
+            self.draw_menus(c, g);
+        }
         self.drag_ghost(c, g);
         self.toasts(c, g);
         self.dialogs(c, g);
+        if menus_over_dialog {
+            self.draw_menus(c, g);
+        }
         if self.record_frames {
             // the CPU time to build the frame (handing it to Windows comes next)
             self.frame_times.push(t0.elapsed().as_secs_f32() * 1000.0);
@@ -1131,9 +1138,11 @@ impl App {
             let e = d.closing.map(|s| s.elapsed().as_secs_f32() * 1000.0 / anim::MOTION_CLOSE).unwrap_or(1.0);
             if e < 1.0 {
                 self.anim.keep_alive();
-                let hits = self.hits.len();
+                let (hits, fields) = (self.hits.len(), self.layout.field_rects.len());
                 self.dialog_card(c, g, &mut d, 1.0 - ease_out(e), 6.0 * ease_out(e));
                 self.hits.truncate(hits);
+                // the open dialog's fields are looked up by index: the closing one's don't count
+                self.layout.field_rects.truncate(fields);
                 self.closing_dialog = Some(d);
             }
         }
@@ -1201,8 +1210,8 @@ impl App {
                 self.button(c, g, x + (dw - 80.0) / 2.0, y + dh - 18.0 - 32.0, 80.0, 32.0, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
                 bh(&mut self.hits, n);
             }
-            DialogKind::Import { normalize, group, busy, started } => {
-                let (normalize, group, busy, started) = (*normalize, group.clone(), *busy, *started);
+            DialogKind::Import { normalize, group, new_group, busy, started } => {
+                let (normalize, group, new_group, busy, started) = (*normalize, group.clone(), *new_group, *busy, *started);
                 c.text(g, x + 24.0, y + 22.0, "Import a sound", 18.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
                 c.text(g, x + 24.0, y + 50.0, "From an Instagram reel or a YouTube video. Only the link is needed.", 12.0, Weight::Normal, dw - 48.0, 1, Align::Left, t.muted);
                 let mut cy = y + 84.0;
@@ -1225,12 +1234,35 @@ impl App {
                 let gr = Rect::new(x + 24.0 + 2.0 * unit + 24.0, cy + 20.0, 2.0 * unit, 38.0);
                 let hov = live && self.is_hover(&Hit::DialogGroup);
                 let is_open = self.menus.first().map(|m| m.owner == MenuOwner::ImportGroup).unwrap_or(false);
-                c.card(gr, 10.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent_edge } else { t.border });
-                c.text(g, gr.x + 12.0, gr.cy() - 9.0, if group.is_empty() { "No group" } else { &group }, 13.0, Weight::Normal, gr.w - 40.0, 1, Align::Left, t.text);
-                icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, gr.right() - 24.0, gr.cy() - 6.0, 12.0, t.muted);
                 self.layout.dialog_group = gr;
-                if live {
-                    self.hit(gr, Hit::DialogGroup);
+                if new_group {
+                    // typing a new group's name; the chevron brings the list back
+                    self.field(c, g, d, 4, gr);
+                    let cr = Rect::new(gr.right() - 38.0, gr.y, 38.0, gr.h);
+                    if hov || is_open {
+                        c.fill_rrect(Rect::new(cr.x + 4.0, cr.y + 5.0, cr.w - 9.0, cr.h - 10.0), 7.0, t.card_hover);
+                    }
+                    icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, cr.cx() - 6.0, cr.cy() - 6.0, 12.0, if hov { t.text } else { t.muted });
+                    if live {
+                        self.hit(cr, Hit::DialogGroup);
+                    }
+                } else {
+                    c.card(gr, 10.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent_edge } else { t.border });
+                    let label = if group.is_empty() { "No group" } else { group.as_str() };
+                    let col = if group.is_empty() { t.muted } else { t.text };
+                    match self.group_color(&group).filter(|_| !group.is_empty()) {
+                        Some(gc) => {
+                            c.fill_circle(gr.x + 17.0, gr.cy(), 4.0, gc);
+                            c.text(g, gr.x + 29.0, gr.cy() - 9.0, label, 13.0, Weight::Normal, gr.w - 57.0, 1, Align::Left, col);
+                        }
+                        None => {
+                            c.text(g, gr.x + 12.0, gr.cy() - 9.0, label, 13.0, Weight::Normal, gr.w - 40.0, 1, Align::Left, col);
+                        }
+                    }
+                    icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, gr.right() - 24.0, gr.cy() - 6.0, 12.0, t.muted);
+                    if live {
+                        self.hit(gr, Hit::DialogGroup);
+                    }
                 }
                 cy += 20.0 + 38.0 + 16.0;
                 let th = live && self.is_hover(&Hit::DialogToggle);

@@ -136,6 +136,8 @@ pub enum Action {
     Theme(String),
     Device(DeviceSlot, String),
     ImportGroup(String),
+    /// the import dialog's "New group…": type a name in place of the dropdown
+    ImportNewGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -222,7 +224,8 @@ pub enum DialogKind {
     Confirm { title: String, text: String, ok: String, action: ConfirmAction },
     Text { title: String, ok: String, action: TextAction },
     Hotkey { what: String, target: HotkeyTarget },
-    Import { normalize: bool, group: String, busy: bool, started: Option<Instant> },
+    /// `new_group`: the Group control is a text field (fields[4]) for a group made on import
+    Import { normalize: bool, group: String, new_group: bool, busy: bool, started: Option<Instant> },
 }
 
 pub struct Dialog {
@@ -292,6 +295,8 @@ pub struct App {
     pub landing: Option<Landing>,
     pub jobs: Vec<Job>,
     next_job: u64,
+    /// the group the import dialog's running import goes into ("" = No group)
+    pub import_target: Option<String>,
     pub status: (String, Level),
     pub devices: Devices,
     pub audio_starting: bool,
@@ -395,6 +400,7 @@ impl App {
             drag: None,
             landing: None,
             jobs: Vec::new(),
+            import_target: None,
             next_job: 1,
             status: ("Starting audio…".into(), Level::Info),
             devices: Devices::default(),
@@ -1279,10 +1285,41 @@ impl App {
         let link = shell::clipboard_text(self.hwnd).and_then(|t| importer::find_link(&t)).unwrap_or_default();
         let mut url = TextField::new("https://www.instagram.com/reel/...  or  https://youtu.be/...");
         url.set(&link);
-        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("0:03.5"), TextField::new("0:07")];
+        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("From the start"), TextField::new("To the end")];
         let g = self.cfg.group.clone();
         let group = if g == ALL || g == NO_GROUP { String::new() } else { g };
-        self.open_dialog(DialogKind::Import { normalize: true, group, busy: false, started: None }, fields, 480.0);
+        self.open_dialog(DialogKind::Import { normalize: true, group, new_group: false, busy: false, started: None }, fields, 480.0);
+    }
+
+    /// The import dialog's Group: an existing group (`Some`, "" = No group), or a new one typed
+    /// in place of the dropdown (`None`).
+    pub fn set_import_group(&mut self, choice: Option<String>) {
+        let Some(d) = &mut self.dialog else { return };
+        let DialogKind::Import { group, new_group, busy, .. } = &mut d.kind else { return };
+        if *busy {
+            return;
+        }
+        match choice {
+            Some(g) => {
+                *group = g;
+                if *new_group {
+                    *new_group = false;
+                    d.fields.truncate(4);
+                    d.focus = d.focus.min(3);
+                }
+            }
+            None => {
+                if !*new_group {
+                    *new_group = true;
+                    d.fields.truncate(4);
+                    d.fields.push(TextField::new("New group name"));
+                }
+                d.focus = 4;
+                self.caret_since = Instant::now();
+            }
+        }
+        d.message = None;
+        self.invalidate();
     }
 
     /// The dialog's OK.
@@ -1311,7 +1348,7 @@ impl App {
                 }
             }
             DialogKind::Hotkey { .. } => self.close_dialog(),
-            DialogKind::Import { normalize, group, busy, started } => {
+            DialogKind::Import { normalize, group, new_group, busy, started } => {
                 if *busy {
                     return;
                 }
@@ -1329,9 +1366,36 @@ impl App {
                         return self.invalidate();
                     }
                 };
+                let mut created = false;
+                if *new_group {
+                    // the group is made now (an import that's cancelled leaves no empty folder)
+                    let typed = d.fields.get(4).map(|f| f.text.trim().to_string()).unwrap_or_default();
+                    if typed.is_empty() {
+                        d.message = Some(("Type a name for the new group, or pick an existing one.".into(), WARN));
+                        d.focus = 4;
+                        return self.invalidate();
+                    }
+                    let safe = library::safe_name(&typed);
+                    // an existing group with that name (any case) is the same folder on Windows
+                    let existing = self.groups.iter().find(|g| g.eq_ignore_ascii_case(&safe)).cloned();
+                    match existing.map(Ok).unwrap_or_else(|| self.lib.create_group(&typed)) {
+                        Ok(g) => {
+                            created = !self.groups.contains(&g);
+                            *group = g;
+                            *new_group = false;
+                            d.fields.truncate(4);
+                            d.focus = d.focus.min(3);
+                        }
+                        Err(e) => {
+                            d.message = Some((format!("Couldn't create the group: {e}"), DANGER));
+                            return self.invalidate();
+                        }
+                    }
+                }
                 *busy = true;
                 *started = Some(Instant::now());
                 d.message = None;
+                self.import_target = Some(group.clone());
                 let req = importer::Request {
                     url,
                     name: if name.is_empty() { None } else { Some(name) },
@@ -1361,6 +1425,9 @@ impl App {
                         w.wake();
                     })
                     .ok();
+                if created {
+                    self.reload(); // its tab shows up now, not only once the import finishes
+                }
                 self.invalidate();
             }
         }
@@ -1372,9 +1439,22 @@ impl App {
                 if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Import { .. })) {
                     self.close_dialog();
                 }
+                let target = self.import_target.take().unwrap_or_default();
+                // show where it went: stay on All, or on the group it was imported into
+                let v = self.view_key();
+                if v != ALL && v != target {
+                    self.cfg.group = if target.is_empty() { NO_GROUP.to_string() } else { target.clone() };
+                    self.save_config();
+                }
                 self.reload();
+                let name = path.strip_prefix(&self.lib.sounds).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                if let Some(cid) = self.id_of(&name) {
+                    self.flash_tile(cid, 0.32);
+                    self.scroll_to_clip(cid);
+                }
                 let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                self.toast(&format!("Added '{stem}'"), Level::Info);
+                let place = if target.is_empty() { String::new() } else { format!(" to {target}") };
+                self.toast(&format!("Added '{stem}'{place}"), Level::Info);
             }
             Err(e) => {
                 crate::log::error(&format!("import failed: {e}"));
@@ -1447,12 +1527,8 @@ impl App {
             Action::StopHotkey => self.record_hotkey(HotkeyTarget::StopAll),
             Action::Theme(n) => self.set_theme(&n),
             Action::Device(slot, name) => self.set_device(slot, name),
-            Action::ImportGroup(g) => {
-                if let Some(Dialog { kind: DialogKind::Import { group, .. }, .. }) = &mut self.dialog {
-                    *group = g;
-                }
-                self.invalidate();
-            }
+            Action::ImportGroup(g) => self.set_import_group(Some(g)),
+            Action::ImportNewGroup => self.set_import_group(None),
         }
     }
 

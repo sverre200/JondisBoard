@@ -135,6 +135,12 @@ impl App {
                     }
                 }
                 Some(Hit::Menu(..)) | Some(Hit::MenuBg(_)) | Some(Hit::Swatch(..)) => {}
+                // the Group control closes its own open list (instead of re-opening it)
+                Some(Hit::DialogGroup) if self.menus.first().map(|m| m.owner == MenuOwner::ImportGroup).unwrap_or(false) => {
+                    self.close_menus();
+                    self.down = None;
+                    return;
+                }
                 _ => {
                     if !self.menus.is_empty() {
                         self.close_menus();
@@ -532,8 +538,8 @@ impl App {
 
     fn import_group_menu(&mut self) {
         let r = self.layout.dialog_group;
-        let current = match &self.dialog {
-            Some(Dialog { kind: DialogKind::Import { group, .. }, .. }) => group.clone(),
+        let (current, typing_new) = match &self.dialog {
+            Some(Dialog { kind: DialogKind::Import { group, new_group, busy: false, .. }, .. }) => (group.clone(), *new_group),
             _ => return,
         };
         let mut items = vec![MenuItem::Item {
@@ -542,13 +548,16 @@ impl App {
             danger: false,
             dot: None,
             enabled: true,
-            checked: current.is_empty(),
+            checked: !typing_new && current.is_empty(),
             instant: false,
         }];
         for g in &self.groups {
-            items.push(MenuItem::Item { text: g.clone(), action: Action::ImportGroup(g.clone()), danger: false, dot: self.group_color(g), enabled: true, checked: *g == current, instant: false });
+            let checked = !typing_new && *g == current;
+            items.push(MenuItem::Item { text: g.clone(), action: Action::ImportGroup(g.clone()), danger: false, dot: self.group_color(g), enabled: true, checked, instant: false });
         }
-        self.open_menu(items, r.x, r.bottom() + 6.0, r.w.max(160.0), MenuOwner::ImportGroup, false);
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Item { text: "New group…".into(), action: Action::ImportNewGroup, danger: false, dot: None, enabled: true, checked: false, instant: false });
+        self.open_menu(items, r.x, r.bottom() + 6.0, r.w.max(180.0), MenuOwner::ImportGroup, false);
     }
 
     // ---------------------------------------------------------------- drag & drop
