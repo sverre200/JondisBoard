@@ -146,6 +146,22 @@ fn snapshots() {
     app(h, |a, _| a.close_dialog());
     app(h, |a, _| a.import_dialog());
     snap(h, &dir, "06_import");
+    app(h, |a, g| {
+        let r = a.layout.dialog_group;
+        a.mouse_move(g, r.cx(), r.cy());
+        a.mouse_down(g, r.cx(), r.cy(), false, false);
+        a.mouse_up(r.cx(), r.cy());
+    });
+    snap(h, &dir, "06b_import_group_menu");
+    app(h, |a, _| {
+        a.close_menus();
+        a.run(Action::ImportNewGroup);
+        for ch in "Fresh finds".chars() {
+            a.char_typed(ch);
+        }
+    });
+    snap(h, &dir, "06c_import_new_group");
+    app(h, |a, _| a.run(Action::ImportGroup(String::new())));
     app(h, |a, _| {
         if let Some(d) = &mut a.dialog {
             d.fields[0].set("https://youtu.be/abc");

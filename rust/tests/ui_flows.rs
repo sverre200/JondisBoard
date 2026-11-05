@@ -9,7 +9,7 @@
 use jondisboard::audio::wav;
 use jondisboard::config::{Binding, ALL};
 use jondisboard::paths::Paths;
-use jondisboard::ui::app::{Action, App, HotkeyTarget};
+use jondisboard::ui::app::{Action, App, Dialog, DialogKind, HotkeyTarget, MenuItem};
 use jondisboard::ui::gfx::Gfx;
 use jondisboard::ui::view::Hit;
 use jondisboard::ui::window;
@@ -323,6 +323,120 @@ fn ui_flows() {
         app(h, |a, _| a.job_done(id, Ok(out.clone())));
         check("a finished import becomes a tile", app(h, |a, _| a.jobs.is_empty() && a.id_of("Imported.wav").is_some()));
     }
+
+    // --- Import a sound: the Group dropdown, a new group made from the dialog, the result shown
+    app(h, |a, _| a.show_group("Memes"));
+    app(h, |a, _| a.import_dialog());
+    frame(h);
+    check("the import dialog starts on the open group", app(h, |a, _| matches!(&a.dialog, Some(Dialog { kind: DialogKind::Import { group, .. }, .. }) if group == "Memes")));
+    let gr = app(h, |a, _| a.layout.dialog_group);
+    click(h, gr.cx(), gr.cy());
+    let (labels, groups) = app(h, |a, _| {
+        let labels: Vec<String> = a.menus.first().map(|m| m.items.iter().filter_map(|it| match it {
+            MenuItem::Item { text, .. } => Some(text.clone()),
+            _ => None,
+        }).collect()).unwrap_or_default();
+        (labels, a.groups.clone())
+    });
+    check("the Group list opens", !labels.is_empty());
+    check("it lists No group, every group and New group…", labels.first().map(String::as_str) == Some("No group") && groups.iter().all(|g| labels.contains(g)) && labels.last().map(String::as_str) == Some("New group…"));
+    let row = |a: &App, label: &str| -> (f32, f32) {
+        let m = &a.menus[0];
+        let i = m.items.iter().position(|it| matches!(it, MenuItem::Item { text, .. } if text == label)).unwrap();
+        (m.rows[i].cx(), m.rows[i].cy())
+    };
+    let (rx, ry) = app(h, |a, _| row(a, "No group"));
+    check("the list is drawn over the dialog (its rows take clicks)", app(h, |a, _| matches!(a.hit_at(rx, ry), Some(Hit::Menu(0, _)))));
+    click(h, rx, ry);
+    check("picking a row sets the group and closes the list", app(h, |a, _| a.menus.is_empty() && matches!(&a.dialog, Some(Dialog { kind: DialogKind::Import { group, .. }, .. }) if group.is_empty())));
+    click(h, gr.cx(), gr.cy());
+    click(h, gr.cx(), gr.cy());
+    check("clicking the Group control again closes its list", app(h, |a, _| a.menus.is_empty() && a.dialog.is_some()));
+    click(h, gr.cx(), gr.cy());
+    let (nx, ny) = app(h, |a, _| row(a, "New group…"));
+    click(h, nx, ny);
+    check("New group… turns the control into a focused name field", app(h, |a, _| matches!(&a.dialog, Some(d) if d.fields.len() == 5 && d.focus == 4 && matches!(d.kind, DialogKind::Import { new_group: true, .. }))));
+    app(h, |a, _| {
+        for c in "Fresh finds".chars() {
+            a.char_typed(c);
+        }
+        a.dialog.as_mut().unwrap().fields[0].set("https://youtu.be/abc123");
+        a.dialog_ok();
+    });
+    frame(h);
+    check("importing makes the new group's folder", lib.0.join("sounds/Fresh finds").is_dir());
+    check("and its tab, straight away", app(h, |a, _| a.groups.iter().any(|g| g == "Fresh finds")));
+    check("the import goes into it", app(h, |a, _| a.import_target.as_deref() == Some("Fresh finds")));
+    // finish it by hand, as a download would
+    let out = lib.0.join("sounds/Fresh finds/Fresh clip.wav");
+    tone(&out, 1.0, 640.0);
+    app(h, |a, _| a.dialog_import_done(Ok(out.clone())));
+    frame(h);
+    check("the dialog closes on success", app(h, |a, _| a.dialog.is_none()));
+    check("the board switches to the sound's group", app(h, |a, _| a.view_key() == "Fresh finds"));
+    check("the new sound is on the board", app(h, |a, _| a.id_of("Fresh finds/Fresh clip.wav").map(|id| a.visible().contains(&id)).unwrap_or(false)));
+    check("and the toast says where it went", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("to Fresh finds")).unwrap_or(false)));
+    window::pump(300);
+
+    // --- menus work from the keyboard
+    app(h, |a, _| a.show_group(ALL));
+    frame(h);
+    let gong_like = app(h, |a, _| a.visible()[0]);
+    let (gx, gy) = app(h, |a, _| tile_center(a, gong_like));
+    app(h, |a, _| a.right_click(gx, gy));
+    frame(h);
+    const DOWN: u32 = 0x28;
+    const ENTER: u32 = 0x0D;
+    app(h, |a, _| a.key_down(DOWN, false, false));
+    check("Down lights the first row of a menu", app(h, |a, _| a.menus.first().and_then(|m| m.hover).is_some()));
+    let first_label = app(h, |a, _| match a.menus[0].hover.and_then(|i| a.menus[0].items.get(i)) {
+        Some(MenuItem::Item { text, .. }) => text.clone(),
+        _ => String::new(),
+    });
+    app(h, |a, _| a.played.clear());
+    if first_label == "Play" {
+        app(h, |a, _| a.key_down(ENTER, false, false));
+        window::pump(80);
+        check("Enter runs the lit row", app(h, |a, _| a.menus.is_empty() && a.played == vec![gong_like]));
+    } else {
+        app(h, |a, _| a.close_menus());
+        println!("  (first clip-menu row is '{first_label}', Enter check skipped)");
+    }
+
+    // --- a name dialog doesn't vanish on an empty name
+    app(h, |a, _| a.run(Action::Rename(gong_like)));
+    app(h, |a, _| {
+        a.dialog.as_mut().unwrap().fields[0].set("   ");
+        a.dialog_ok();
+    });
+    check("an empty name keeps the dialog open and says why", app(h, |a, _| a.dialog.as_ref().map(|d| d.message.is_some()).unwrap_or(false)));
+    app(h, |a, _| a.close_dialog());
+    frame(h);
+
+    // --- sounds added in Explorer show up when the window comes back
+    let cfg_before = std::fs::metadata(lib.0.join("config.json")).unwrap().modified().unwrap();
+    app(h, |a, _| a.refresh_if_changed());
+    check("nothing changed on disk: no reload, no config write", std::fs::metadata(lib.0.join("config.json")).unwrap().modified().unwrap() == cfg_before);
+    tone(&lib.0.join("sounds/Dropped in.wav"), 0.5, 700.0);
+    app(h, |a, _| a.refresh_if_changed());
+    check("a file added outside the app appears", app(h, |a, _| a.id_of("Dropped in.wav").is_some()));
+    std::fs::remove_file(lib.0.join("sounds/Dropped in.wav")).unwrap();
+    app(h, |a, _| a.refresh_if_changed());
+    check("and goes when it's removed", app(h, |a, _| a.id_of("Dropped in.wav").is_none()));
+
+    // --- Add files / files dropped from Explorer: into the open group, with feedback
+    let outside = std::env::temp_dir().join(format!("jb_ui_drop_{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    tone(&outside.join("Picked.wav"), 0.5, 520.0);
+    std::fs::write(outside.join("notes.txt"), b"not a sound").unwrap();
+    app(h, |a, _| {
+        a.show_group("Memes");
+        a.add_paths(&[outside.join("Picked.wav"), outside.join("notes.txt")]);
+    });
+    check("an added sound goes into the open group", lib.0.join("sounds/Memes/Picked.wav").exists() && app(h, |a, _| a.id_of("Memes/Picked.wav").is_some()));
+    check("a non-sound file isn't copied in", !lib.0.join("sounds/Memes/notes.txt").exists());
+    check("and the toast says both", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("Added 1 to Memes") && t.text.contains("notes.txt")).unwrap_or(false)));
+    let _ = std::fs::remove_dir_all(&outside);
 
     // --- the config keeps keys this version doesn't know
     check("unknown config keys survive", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("unknown_key"));

@@ -44,6 +44,12 @@ keyboard hook, so they're safe while a game is running. Snapshots go to `%TEMP%\
 set JB_REAL_COPY=C:\path\to\copy && cargo test --release --test compat_real -- --nocapture
 ```
 
+The real link import (internet, `vendor\yt-dlp.exe` + `ffmpeg.exe`, a throwaway folder):
+
+```bash
+set JB_NETWORK_IMPORT=1 && cargo test --release --test import_network -- --nocapture
+```
+
 ## Audio diagnostics
 
 ```bash

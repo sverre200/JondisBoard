@@ -52,6 +52,8 @@ pub enum Msg {
     DialogImportStatus(&'static str),
     Picture(super::images::Decoded),
     AudioStarted(Result<Vec<String>, String>, Devices, [Option<String>; 3]),
+    /// after a device was lost: whether every configured device is present again
+    AudioProbe(bool),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -136,6 +138,8 @@ pub enum Action {
     Theme(String),
     Device(DeviceSlot, String),
     ImportGroup(String),
+    /// the import dialog's "New group…": type a name in place of the dropdown
+    ImportNewGroup,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -222,7 +226,8 @@ pub enum DialogKind {
     Confirm { title: String, text: String, ok: String, action: ConfirmAction },
     Text { title: String, ok: String, action: TextAction },
     Hotkey { what: String, target: HotkeyTarget },
-    Import { normalize: bool, group: String, busy: bool, started: Option<Instant> },
+    /// `new_group`: the Group control is a text field (fields[4]) for a group made on import
+    Import { normalize: bool, group: String, new_group: bool, busy: bool, started: Option<Instant> },
 }
 
 pub struct Dialog {
@@ -292,9 +297,15 @@ pub struct App {
     pub landing: Option<Landing>,
     pub jobs: Vec<Job>,
     next_job: u64,
+    /// the group the import dialog's running import goes into ("" = No group)
+    pub import_target: Option<String>,
     pub status: (String, Level),
     pub devices: Devices,
     pub audio_starting: bool,
+    /// a device stopped; the app reconnects by itself once it's back
+    pub audio_lost: bool,
+    /// the running start_audio is a quiet reconnect attempt
+    audio_retry: bool,
     pub progress: Vec<(u32, f32)>,
     pub playing: HashMap<u32, f32>,
     pub flash: HashMap<u32, (Instant, f32)>,
@@ -395,10 +406,13 @@ impl App {
             drag: None,
             landing: None,
             jobs: Vec::new(),
+            import_target: None,
             next_job: 1,
             status: ("Starting audio…".into(), Level::Info),
             devices: Devices::default(),
             audio_starting: true,
+            audio_lost: false,
+            audio_retry: false,
             progress: Vec::new(),
             playing: HashMap::new(),
             flash: HashMap::new(),
@@ -570,6 +584,22 @@ impl App {
     }
 
     /// The tab shown: All while searching, else the chosen group.
+    /// Re-read sounds/ only if files or folders changed on disk (cheap: one directory scan, no
+    /// config write), e.g. when the window comes back to the front.
+    pub fn refresh_if_changed(&mut self) {
+        if self.drag.is_some() {
+            return;
+        }
+        let Ok(scan) = library::scan(&self.lib.sounds) else { return };
+        let same = scan.groups == self.groups
+            && scan.clips.len() == self.clips.len()
+            && scan.clips.iter().all(|f| self.id_of(&f.name).and_then(|id| self.clip(id)).map(|c| c.size == f.size && c.mtime == f.mtime).unwrap_or(false));
+        if !same {
+            crate::log::info("sounds folder changed on disk; reloading");
+            self.reload();
+        }
+    }
+
     pub fn view_key(&self) -> String {
         if !self.query.is_empty() {
             ALL.to_string()
@@ -761,9 +791,55 @@ impl App {
             .ok();
     }
 
+    /// A device stopped: look (off the UI thread) whether the configured devices are all there
+    /// again. Only then are the streams reopened, so a mic that still works isn't cut every few
+    /// seconds while the headphones are unplugged.
+    pub fn probe_audio(&mut self) {
+        if !self.audio_lost || self.audio_starting || test_mode() {
+            return;
+        }
+        let want = (self.cfg.mic.clone(), self.cfg.cable.clone(), self.cfg.monitor.clone());
+        let (tx, w) = (self.tx.clone(), self.waker);
+        std::thread::Builder::new()
+            .name("audio probe".into())
+            .spawn(move || {
+                let _com = wasapi::ComScope::mta();
+                let ins = wasapi::list(Kind::Input);
+                let outs = wasapi::list(Kind::Output);
+                let has = |list: &[wasapi::DeviceInfo], n: &Option<String>| n.as_ref().map(|n| list.iter().any(|d| &d.name == n)).unwrap_or(true);
+                let present = has(&ins, &want.0) && has(&outs, &want.1) && has(&outs, &want.2);
+                let _ = tx.send(Msg::AudioProbe(present));
+                w.wake();
+            })
+            .ok();
+    }
+
     pub fn audio_started(&mut self, r: Result<Vec<String>, String>, devices: Devices, chosen: [Option<String>; 3]) {
         self.audio_starting = false;
         self.devices = devices;
+        if std::mem::take(&mut self.audio_retry) {
+            // a quiet reconnect: it keeps trying only while the streams fail to open
+            match &r {
+                Err(_) => {
+                    self.set_status("Reconnecting audio…", Level::Warn);
+                    super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                    return self.invalidate();
+                }
+                Ok(w) => {
+                    self.audio_lost = false;
+                    crate::log::info("audio reconnected");
+                    if w.is_empty() {
+                        self.set_status("Live", Level::Good);
+                        self.toast("Audio is back.", Level::Info);
+                        return self.invalidate();
+                    }
+                    // opened, with a setup warning: shown the usual way below (once)
+                }
+            }
+        }
+        if r.is_ok() {
+            self.audio_lost = false; // Restart audio (or a new device pick) fixed it
+        }
         match r {
             Err(e) => {
                 crate::log::error(&format!("audio start failed: {e}"));
@@ -1062,12 +1138,39 @@ impl App {
         if files.is_empty() {
             return;
         }
+        self.add_paths(&files);
+    }
+
+    /// Copy picked files into the open group (No group on All) and show the result.
+    pub fn add_paths(&mut self, files: &[PathBuf]) {
+        let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = files.iter().cloned().partition(|p| library::is_audio(p));
         let folder = self.current_folder();
-        let results = self.lib.add_files(&files, &folder);
-        let errors: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
+        let results = self.lib.add_files(&audio, &folder);
+        let mut errors: Vec<String> = results.iter().filter_map(|r| r.as_ref().err().cloned()).collect();
+        if !other.is_empty() {
+            let names: Vec<String> = other.iter().filter_map(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).collect();
+            errors.push(format!("{} isn't a sound file", names.join(", ")));
+        }
+        let added: Vec<String> = results.into_iter().filter_map(Result::ok).collect();
         self.reload();
-        if !errors.is_empty() {
-            self.toast(&format!("Couldn't add: {}", errors.join("; ")), Level::Warn);
+        for n in &added {
+            if let Some(id) = self.id_of(n) {
+                self.flash_tile(id, 0.32);
+            }
+        }
+        if let Some(id) = added.last().and_then(|n| self.id_of(n)) {
+            self.scroll_to_clip(id);
+        }
+        let g = self.cfg.group.clone();
+        let place = if g == ALL || g == NO_GROUP { String::new() } else { format!(" to {g}") };
+        match (added.len(), errors.is_empty()) {
+            (_, false) => {
+                let lead = if added.is_empty() { String::new() } else { format!("Added {}{place}. ", added.len()) };
+                self.toast(&format!("{lead}Couldn't add: {}", errors.join("; ")), Level::Warn)
+            }
+            (0, true) => {}
+            (1, true) => self.toast(&format!("Added '{}'{place}", library::stem_of(&added[0])), Level::Info),
+            (n, true) => self.toast(&format!("Added {n} sounds{place}"), Level::Info),
         }
     }
 
@@ -1279,10 +1382,41 @@ impl App {
         let link = shell::clipboard_text(self.hwnd).and_then(|t| importer::find_link(&t)).unwrap_or_default();
         let mut url = TextField::new("https://www.instagram.com/reel/...  or  https://youtu.be/...");
         url.set(&link);
-        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("0:03.5"), TextField::new("0:07")];
+        let fields = vec![url, TextField::new("Leave empty to use the video's title"), TextField::new("0:00"), TextField::new("Full length")];
         let g = self.cfg.group.clone();
         let group = if g == ALL || g == NO_GROUP { String::new() } else { g };
-        self.open_dialog(DialogKind::Import { normalize: true, group, busy: false, started: None }, fields, 480.0);
+        self.open_dialog(DialogKind::Import { normalize: true, group, new_group: false, busy: false, started: None }, fields, 480.0);
+    }
+
+    /// The import dialog's Group: an existing group (`Some`, "" = No group), or a new one typed
+    /// in place of the dropdown (`None`).
+    pub fn set_import_group(&mut self, choice: Option<String>) {
+        let Some(d) = &mut self.dialog else { return };
+        let DialogKind::Import { group, new_group, busy, .. } = &mut d.kind else { return };
+        if *busy {
+            return;
+        }
+        match choice {
+            Some(g) => {
+                *group = g;
+                if *new_group {
+                    *new_group = false;
+                    d.fields.truncate(4);
+                    d.focus = d.focus.min(3);
+                }
+            }
+            None => {
+                if !*new_group {
+                    *new_group = true;
+                    d.fields.truncate(4);
+                    d.fields.push(TextField::new("New group name"));
+                }
+                d.focus = 4;
+                self.caret_since = Instant::now();
+            }
+        }
+        d.message = None;
+        self.invalidate();
     }
 
     /// The dialog's OK.
@@ -1299,11 +1433,12 @@ impl App {
             }
             DialogKind::Text { action, .. } => {
                 let text = d.fields[0].text.trim().to_string();
+                if text.is_empty() {
+                    d.message = Some(("Type a name first.".into(), WARN));
+                    return self.invalidate();
+                }
                 let a = action.clone();
                 self.close_dialog();
-                if text.is_empty() {
-                    return;
-                }
                 match a {
                     TextAction::NewGroup(with) => self.new_group(&text, with),
                     TextAction::RenameGroup(g) => self.rename_group(&g, &text),
@@ -1311,7 +1446,7 @@ impl App {
                 }
             }
             DialogKind::Hotkey { .. } => self.close_dialog(),
-            DialogKind::Import { normalize, group, busy, started } => {
+            DialogKind::Import { normalize, group, new_group, busy, started } => {
                 if *busy {
                     return;
                 }
@@ -1329,9 +1464,36 @@ impl App {
                         return self.invalidate();
                     }
                 };
+                let mut created = false;
+                if *new_group {
+                    // the group is made now (an import that's cancelled leaves no empty folder)
+                    let typed = d.fields.get(4).map(|f| f.text.trim().to_string()).unwrap_or_default();
+                    if typed.is_empty() {
+                        d.message = Some(("Type a name for the new group, or pick an existing one.".into(), WARN));
+                        d.focus = 4;
+                        return self.invalidate();
+                    }
+                    let safe = library::safe_name(&typed);
+                    // an existing group with that name (any case) is the same folder on Windows
+                    let existing = self.groups.iter().find(|g| g.eq_ignore_ascii_case(&safe)).cloned();
+                    match existing.map(Ok).unwrap_or_else(|| self.lib.create_group(&typed)) {
+                        Ok(g) => {
+                            created = !self.groups.contains(&g);
+                            *group = g;
+                            *new_group = false;
+                            d.fields.truncate(4);
+                            d.focus = d.focus.min(3);
+                        }
+                        Err(e) => {
+                            d.message = Some((format!("Couldn't create the group: {e}"), DANGER));
+                            return self.invalidate();
+                        }
+                    }
+                }
                 *busy = true;
                 *started = Some(Instant::now());
                 d.message = None;
+                self.import_target = Some(group.clone());
                 let req = importer::Request {
                     url,
                     name: if name.is_empty() { None } else { Some(name) },
@@ -1361,6 +1523,9 @@ impl App {
                         w.wake();
                     })
                     .ok();
+                if created {
+                    self.reload(); // its tab shows up now, not only once the import finishes
+                }
                 self.invalidate();
             }
         }
@@ -1372,9 +1537,22 @@ impl App {
                 if matches!(self.dialog.as_ref().map(|d| &d.kind), Some(DialogKind::Import { .. })) {
                     self.close_dialog();
                 }
+                let target = self.import_target.take().unwrap_or_default();
+                // show where it went: stay on All, or on the group it was imported into
+                let v = self.view_key();
+                if v != ALL && v != target {
+                    self.cfg.group = if target.is_empty() { NO_GROUP.to_string() } else { target.clone() };
+                    self.save_config();
+                }
                 self.reload();
+                let name = path.strip_prefix(&self.lib.sounds).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                if let Some(cid) = self.id_of(&name) {
+                    self.flash_tile(cid, 0.32);
+                    self.scroll_to_clip(cid);
+                }
                 let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                self.toast(&format!("Added '{stem}'"), Level::Info);
+                let place = if target.is_empty() { String::new() } else { format!(" to {target}") };
+                self.toast(&format!("Added '{stem}'{place}"), Level::Info);
             }
             Err(e) => {
                 crate::log::error(&format!("import failed: {e}"));
@@ -1447,12 +1625,8 @@ impl App {
             Action::StopHotkey => self.record_hotkey(HotkeyTarget::StopAll),
             Action::Theme(n) => self.set_theme(&n),
             Action::Device(slot, name) => self.set_device(slot, name),
-            Action::ImportGroup(g) => {
-                if let Some(Dialog { kind: DialogKind::Import { group, .. }, .. }) = &mut self.dialog {
-                    *group = g;
-                }
-                self.invalidate();
-            }
+            Action::ImportGroup(g) => self.set_import_group(Some(g)),
+            Action::ImportNewGroup => self.set_import_group(None),
         }
     }
 
@@ -1491,8 +1665,23 @@ impl App {
                     }
                 }
                 Msg::Engine(Event::DeviceLost) => {
-                    self.set_status("Check audio setup", Level::Warn);
-                    self.toast("An audio device stopped (unplugged?). Pick it again or press Restart audio in Settings.", Level::Warn);
+                    if !self.audio_lost {
+                        self.audio_lost = true;
+                        crate::log::warn("an audio device stopped; reconnecting when it's back");
+                        self.set_status("Reconnecting audio…", Level::Warn);
+                        self.toast("An audio device stopped (unplugged?). It reconnects by itself when it's back.", Level::Warn);
+                    }
+                    super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                }
+                Msg::AudioProbe(present) => {
+                    if !self.audio_lost || self.audio_starting {
+                        // fixed by hand meanwhile, or a start is already running
+                    } else if present {
+                        self.audio_retry = true;
+                        self.start_audio();
+                    } else {
+                        super::window::set_timer(self.hwnd, super::window::TIMER_AUDIO_RETRY, AUDIO_RETRY_MS);
+                    }
                 }
                 Msg::Engine(Event::StoppedAll) => {
                     self.poll_progress();
@@ -1575,6 +1764,9 @@ fn finish_import(imp: importer::Imported) -> PathBuf {
 pub fn test_mode() -> bool {
     std::env::var_os("JONDISBOARD_TEST").is_some()
 }
+
+/// How often a lost audio device is looked for.
+const AUDIO_RETRY_MS: u32 = 3000;
 
 fn cfg_budget(_cfg: &Config) -> usize {
     // decoded audio kept in memory: 1 GiB (about 90 minutes of 16-bit stereo). Clips past the

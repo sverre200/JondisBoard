@@ -242,6 +242,24 @@ pub fn convert(ffmpeg: &Path, src: &Path, out: &Path, start: Option<f64>, end: O
     Ok(())
 }
 
+/// Move a finished file into `folder` as `<stem>.wav` (or `<stem> (2).wav` ...). Temp and the
+/// library can be on different drives: then it's copied to a hidden `.part` name first (not an
+/// audio extension, so the board never shows it) and renamed when complete.
+fn place(staged: &Path, folder: &Path, stem: &str) -> Result<PathBuf, String> {
+    let out = unique_path(folder, stem, ".wav");
+    if std::fs::rename(staged, &out).is_ok() {
+        return Ok(out);
+    }
+    let part = out.with_extension("wav.part");
+    let r = std::fs::copy(staged, &part).and_then(|_| std::fs::rename(&part, &out));
+    if let Err(e) = r {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("Couldn't save the sound: {e}"));
+    }
+    let _ = std::fs::remove_file(staged);
+    Ok(out)
+}
+
 /// Download and convert. `progress` gets "Downloading", "Cutting audio", "Finishing".
 pub fn import_clip(req: &Request, tools: &Tools, progress: &dyn Fn(&str)) -> Result<Imported, String> {
     let yt = tools.yt_dlp.as_deref().ok_or("yt-dlp.exe not found (it should be next to JondisBoard.exe)")?;
@@ -300,10 +318,13 @@ pub fn import_clip(req: &Request, tools: &Tools, progress: &dyn Fn(&str)) -> Res
             .ok_or("Download produced no file")?;
         let thumbnail = files.iter().find(|p| is_pic(p)).cloned();
         let name = req.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| name_from_info(&info));
-        let out = unique_path(&req.folder, &safe_name(&name), ".wav");
         progress("Cutting audio");
-        convert(ffmpeg, &src, &out, req.start, req.end, req.normalize)?;
+        // converted in the temp folder, then moved in whole: closing the app mid-import never
+        // leaves a half-written sound in the library
+        let staged = tmp.join("converted.wav");
+        convert(ffmpeg, &src, &staged, req.start, req.end, req.normalize)?;
         progress("Finishing");
+        let out = place(&staged, &req.folder, &safe_name(&name))?;
         Ok(Imported { audio: out, thumbnail, temp: tmp.clone() })
     })();
     if result.is_err() {
@@ -326,6 +347,25 @@ mod tests {
         assert_eq!(find_link("https://example.com/x https://youtube.com/shorts/a").as_deref(), Some("https://youtube.com/shorts/a"));
         assert_eq!(find_link("https://youtube.com/"), None);
         assert_eq!(find_link("nothing here"), None);
+    }
+
+    #[test]
+    fn finished_imports_move_in_whole_and_never_overwrite() {
+        let dir = std::env::temp_dir().join(format!("jb_place_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (tmp, lib) = (dir.join("tmp"), dir.join("lib"));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("Clip.wav"), b"old").unwrap();
+        let staged = tmp.join("converted.wav");
+        std::fs::write(&staged, b"new").unwrap();
+        let out = place(&staged, &lib, "Clip").unwrap();
+        assert_eq!(out, lib.join("Clip (2).wav"));
+        assert_eq!(std::fs::read(&out).unwrap(), b"new");
+        assert_eq!(std::fs::read(lib.join("Clip.wav")).unwrap(), b"old");
+        assert!(!staged.exists());
+        assert!(std::fs::read_dir(&lib).unwrap().flatten().all(|e| !e.path().to_string_lossy().ends_with(".part")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

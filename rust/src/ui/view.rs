@@ -241,10 +241,17 @@ impl App {
         self.board(c, g, Rect::new(16.0, tabs_bottom, w - 26.0, footer_y - tabs_bottom));
         self.footer(c, g, w, footer_y);
         self.settings_panel(c, g);
-        self.draw_menus(c, g);
+        // a dialog's own menu (its Group dropdown) goes over the dialog, the rest under its scrim
+        let menus_over_dialog = self.dialog.is_some();
+        if !menus_over_dialog {
+            self.draw_menus(c, g);
+        }
         self.drag_ghost(c, g);
         self.toasts(c, g);
         self.dialogs(c, g);
+        if menus_over_dialog {
+            self.draw_menus(c, g);
+        }
         if self.record_frames {
             // the CPU time to build the frame (handing it to Windows comes next)
             self.frame_times.push(t0.elapsed().as_secs_f32() * 1000.0);
@@ -996,7 +1003,7 @@ impl App {
                 MenuItem::Item { text, danger, dot, enabled, checked, .. } => {
                     let row = Rect::new(r.x + 5.0, y + 1.0, r.w - 10.0, 32.0);
                     let hit = Hit::Menu(level, i);
-                    let lit = live && *enabled && !*checked && (self.is_hover(&hit) || child_row == Some(i));
+                    let lit = live && *enabled && !*checked && (self.is_hover(&hit) || child_row == Some(i) || m.hover == Some(i));
                     let col = self.anim.color(key("menurow", (level as u64) << 32 | i as u64 | (hash_str(text) << 40)), if lit { t.card_hover } else { t.elevated }, if lit { MOTION_HOVER } else { MOTION_UNHOVER });
                     if col != t.elevated {
                         c.fill_rrect(row, 7.0, col);
@@ -1020,7 +1027,7 @@ impl App {
                 MenuItem::Submenu { text, .. } => {
                     let row = Rect::new(r.x + 5.0, y + 1.0, r.w - 10.0, 32.0);
                     let hit = Hit::Menu(level, i);
-                    let lit = live && (self.is_hover(&hit) || child_row == Some(i));
+                    let lit = live && (self.is_hover(&hit) || child_row == Some(i) || m.hover == Some(i));
                     let col = self.anim.color(key("menurow", (level as u64) << 32 | i as u64 | (hash_str(text) << 40)), if lit { t.card_hover } else { t.elevated }, if lit { MOTION_HOVER } else { MOTION_UNHOVER });
                     if col != t.elevated {
                         c.fill_rrect(row, 7.0, col);
@@ -1131,9 +1138,11 @@ impl App {
             let e = d.closing.map(|s| s.elapsed().as_secs_f32() * 1000.0 / anim::MOTION_CLOSE).unwrap_or(1.0);
             if e < 1.0 {
                 self.anim.keep_alive();
-                let hits = self.hits.len();
+                let (hits, fields) = (self.hits.len(), self.layout.field_rects.len());
                 self.dialog_card(c, g, &mut d, 1.0 - ease_out(e), 6.0 * ease_out(e));
                 self.hits.truncate(hits);
+                // the open dialog's fields are looked up by index: the closing one's don't count
+                self.layout.field_rects.truncate(fields);
                 self.closing_dialog = Some(d);
             }
         }
@@ -1176,33 +1185,36 @@ impl App {
         match &d.kind {
             DialogKind::Confirm { title, text, ok, .. } => {
                 let (title, text, ok) = (title.clone(), text.clone(), ok.clone());
-                c.text(g, x + 22.0, y + 20.0, &title, 16.0, Weight::Bold, dw - 44.0, 1, Align::Left, t.text);
-                c.text(g, x + 22.0, y + 48.0, &text, 13.0, Weight::Normal, dw - 44.0, 4, Align::Left, t.muted);
+                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Bold, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
+                c.text(g, x + DLG_PAD, y + 56.0, &text, 13.0, Weight::Normal, dw - 2.0 * DLG_PAD, 4, Align::Left, t.muted);
                 let n = self.hits.len();
-                self.button(c, g, x + dw - 22.0 - 100.0, y + dh - 18.0 - 36.0, 100.0, 36.0, &ok, None, Kind::Danger, Hit::DialogOk, false);
-                self.button(c, g, x + dw - 22.0 - 100.0 - 8.0 - 80.0, y + dh - 18.0 - 36.0, 80.0, 36.0, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
+                self.dialog_buttons(c, g, r, &ok, Kind::Danger);
                 bh(&mut self.hits, n);
             }
             DialogKind::Text { title, ok, .. } => {
                 let (title, ok) = (title.clone(), ok.clone());
-                c.text(g, x + 22.0, y + 20.0, &title, 16.0, Weight::Bold, dw - 44.0, 1, Align::Left, t.text);
-                self.field(c, g, d, 0, Rect::new(x + 22.0, y + 56.0, dw - 44.0, 36.0));
+                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Bold, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
+                self.field(c, g, d, 0, Rect::new(x + DLG_PAD, y + 60.0, dw - 2.0 * DLG_PAD, 38.0));
+                if let Some((msg, col)) = &d.message {
+                    let (msg, col) = (msg.clone(), *col);
+                    c.text(g, x + DLG_PAD + 2.0, y + 60.0 + 38.0 + 8.0, &msg, 12.0, Weight::Normal, dw - 2.0 * DLG_PAD, 2, Align::Left, col);
+                }
                 let n = self.hits.len();
-                self.button(c, g, x + dw - 22.0 - 90.0, y + dh - 18.0 - 36.0, 90.0, 36.0, &ok, None, Kind::Primary, Hit::DialogOk, false);
-                self.button(c, g, x + dw - 22.0 - 90.0 - 8.0 - 80.0, y + dh - 18.0 - 36.0, 80.0, 36.0, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
+                self.dialog_buttons(c, g, r, &ok, Kind::Primary);
                 bh(&mut self.hits, n);
             }
             DialogKind::Hotkey { what, .. } => {
                 let what = what.clone();
-                c.text(g, x + 16.0, y + 24.0, &what, 13.0, Weight::Normal, dw - 32.0, 1, Align::Center, t.muted);
+                c.text(g, x + DLG_PAD, y + 24.0, &what, 13.0, Weight::Normal, dw - 2.0 * DLG_PAD, 1, Align::Center, t.muted);
                 c.text(g, x, y + 48.0, "Press a key", 22.0, Weight::Bold, dw, 1, Align::Center, t.text);
                 c.text(g, x, y + 84.0, "Ctrl / Shift / Alt combos work  ·  Esc to cancel", 12.0, Weight::Normal, dw, 1, Align::Center, t.muted);
                 let n = self.hits.len();
-                self.button(c, g, x + (dw - 80.0) / 2.0, y + dh - 18.0 - 32.0, 80.0, 32.0, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
+                let cw = self.button_width(g, "Cancel", false, Kind::Ghost).max(88.0);
+                self.button(c, g, x + (dw - cw) / 2.0, y + dh - DLG_FOOT - DLG_BTN, cw, DLG_BTN, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
                 bh(&mut self.hits, n);
             }
-            DialogKind::Import { normalize, group, busy, started } => {
-                let (normalize, group, busy, started) = (*normalize, group.clone(), *busy, *started);
+            DialogKind::Import { normalize, group, new_group, busy, started } => {
+                let (normalize, group, new_group, busy, started) = (*normalize, group.clone(), *new_group, *busy, *started);
                 c.text(g, x + 24.0, y + 22.0, "Import a sound", 18.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
                 c.text(g, x + 24.0, y + 50.0, "From an Instagram reel or a YouTube video. Only the link is needed.", 12.0, Weight::Normal, dw - 48.0, 1, Align::Left, t.muted);
                 let mut cy = y + 84.0;
@@ -1225,12 +1237,35 @@ impl App {
                 let gr = Rect::new(x + 24.0 + 2.0 * unit + 24.0, cy + 20.0, 2.0 * unit, 38.0);
                 let hov = live && self.is_hover(&Hit::DialogGroup);
                 let is_open = self.menus.first().map(|m| m.owner == MenuOwner::ImportGroup).unwrap_or(false);
-                c.card(gr, 10.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent_edge } else { t.border });
-                c.text(g, gr.x + 12.0, gr.cy() - 9.0, if group.is_empty() { "No group" } else { &group }, 13.0, Weight::Normal, gr.w - 40.0, 1, Align::Left, t.text);
-                icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, gr.right() - 24.0, gr.cy() - 6.0, 12.0, t.muted);
                 self.layout.dialog_group = gr;
-                if live {
-                    self.hit(gr, Hit::DialogGroup);
+                if new_group {
+                    // typing a new group's name; the chevron brings the list back
+                    self.field(c, g, d, 4, gr);
+                    let cr = Rect::new(gr.right() - 38.0, gr.y, 38.0, gr.h);
+                    if hov || is_open {
+                        c.fill_rrect(Rect::new(cr.x + 4.0, cr.y + 5.0, cr.w - 9.0, cr.h - 10.0), 7.0, t.card_hover);
+                    }
+                    icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, cr.cx() - 6.0, cr.cy() - 6.0, 12.0, if hov { t.text } else { t.muted });
+                    if live {
+                        self.hit(cr, Hit::DialogGroup);
+                    }
+                } else {
+                    c.card(gr, 10.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent_edge } else { t.border });
+                    let label = if group.is_empty() { "No group" } else { group.as_str() };
+                    let col = if group.is_empty() { t.muted } else { t.text };
+                    match self.group_color(&group).filter(|_| !group.is_empty()) {
+                        Some(gc) => {
+                            c.fill_circle(gr.x + 17.0, gr.cy(), 4.0, gc);
+                            c.text(g, gr.x + 29.0, gr.cy() - 9.0, label, 13.0, Weight::Normal, gr.w - 57.0, 1, Align::Left, col);
+                        }
+                        None => {
+                            c.text(g, gr.x + 12.0, gr.cy() - 9.0, label, 13.0, Weight::Normal, gr.w - 40.0, 1, Align::Left, col);
+                        }
+                    }
+                    icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, gr.right() - 24.0, gr.cy() - 6.0, 12.0, t.muted);
+                    if live {
+                        self.hit(gr, Hit::DialogGroup);
+                    }
                 }
                 cy += 20.0 + 38.0 + 16.0;
                 let th = live && self.is_hover(&Hit::DialogToggle);
@@ -1262,18 +1297,35 @@ impl App {
                 cy += 18.0;
                 c.fill_rect(Rect::new(x, cy, dw, 1.0), t.border);
                 let n = self.hits.len();
-                self.button(c, g, x + dw - 24.0 - 120.0, cy + 16.0, 120.0, 38.0, "Import", None, Kind::Primary, Hit::DialogOk, false);
-                self.button(c, g, x + dw - 24.0 - 120.0 - 8.0 - 88.0, cy + 16.0, 88.0, 38.0, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
+                self.dialog_buttons(c, g, Rect::new(x, y, dw, cy + 16.0 + DLG_BTN + DLG_FOOT - y), if busy { "Importing…" } else { "Import" }, Kind::Primary);
                 bh(&mut self.hits, n);
             }
         }
         c.pop_opacity(pushed);
     }
 
+    /// Every dialog's footer: OK on the right (sized to its label, at least 96 wide), Cancel to
+    /// its left, both DLG_BTN tall, DLG_FOOT above the card's bottom edge.
+    fn dialog_buttons(&mut self, c: &mut Canvas, g: &mut Gfx, card: Rect, ok: &str, kind: Kind) {
+        let by = card.bottom() - DLG_FOOT - DLG_BTN;
+        let ow = self.button_width(g, ok, false, kind).max(96.0);
+        let cw = self.button_width(g, "Cancel", false, Kind::Ghost).max(88.0);
+        let ox = card.right() - DLG_PAD - ow;
+        self.button(c, g, ox, by, ow, DLG_BTN, ok, None, kind, Hit::DialogOk, false);
+        self.button(c, g, ox - 8.0 - cw, by, cw, DLG_BTN, "Cancel", None, Kind::Ghost, Hit::DialogCancel, false);
+    }
+
     fn dialog_height(&self, g: &mut Gfx, d: &Dialog) -> f32 {
         match &d.kind {
-            DialogKind::Confirm { .. } | DialogKind::Text { .. } => 170.0,
-            DialogKind::Hotkey { .. } => 190.0,
+            DialogKind::Confirm { text, .. } => {
+                let th = g.layout(text, 13.0, Weight::Normal, d.width - 2.0 * DLG_PAD, 4, Align::Left).map(|l| l.height).unwrap_or(18.0);
+                56.0 + th + 24.0 + DLG_BTN + DLG_FOOT
+            }
+            DialogKind::Text { .. } => {
+                let msg = d.message.as_ref().map(|(m, _)| 8.0 + g.layout(m, 12.0, Weight::Normal, d.width - 2.0 * DLG_PAD, 2, Align::Left).map(|l| l.height).unwrap_or(16.0)).unwrap_or(0.0);
+                60.0 + 38.0 + msg + 24.0 + DLG_BTN + DLG_FOOT
+            }
+            DialogKind::Hotkey { .. } => 196.0,
             DialogKind::Import { busy, .. } => {
                 let mut h = 84.0 + 3.0 * (20.0 + 38.0 + 14.0) + 2.0 + 22.0;
                 if let Some((m, _)) = &d.message {
@@ -1282,11 +1334,16 @@ impl App {
                 if *busy {
                     h += 15.0;
                 }
-                h + 18.0 + 1.0 + 16.0 + 38.0 + 16.0
+                h + 18.0 + 1.0 + 16.0 + DLG_BTN + DLG_FOOT
             }
         }
     }
 }
+
+/// Dialog metrics, shared by every dialog: side padding, button height, space under the buttons.
+const DLG_PAD: f32 = 24.0;
+const DLG_BTN: f32 = 38.0;
+const DLG_FOOT: f32 = 20.0;
 
 fn empty_menu() -> Menu {
     Menu { items: vec![], x: 0.0, y: 0.0, w: 0.0, born: Instant::now(), owner: MenuOwner::Context, parent_row: None, dx: 0.0, dy: 0.0, rows: vec![], rect: Rect::default(), hover: None }

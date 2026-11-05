@@ -21,3 +21,8 @@ config.json
 
 # misc
 reels.txt
+
+# the Rust app's config backup and the bundled ffmpeg licence (next to the installed exe)
+config.backup.json
+ffmpeg-LICENSE.txt
+python-app-backup/
