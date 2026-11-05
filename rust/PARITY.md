@@ -83,7 +83,7 @@ whole time, and the loopback refuses then (see "Not done / not verified").
 |---|---|---|
 | Quick import (button / Ctrl+V): link from clipboard, pending tile, status, Retry/Dismiss, full error on click | done | auto (no link, pending tile, failure, dismiss) |
 | Import link… dialog: link, name, start/end, group, Even out loudness, progress, errors | done | visual; validation logic unit-tested |
-| yt-dlp (standalone exe) download, Instagram caption / YouTube title naming, thumbnail → picture | done | **manual: no network test run; yt-dlp.exe not bundled yet** |
+| yt-dlp (standalone exe) download, Instagram caption / YouTube title naming, thumbnail → picture | done | bundled (official release, SHA-256 verified); **manual: no real download tested yet** |
 | Two-pass linear loudnorm to −16 LUFS, cut, 48 kHz stereo WAV | done | unit (real ffmpeg) |
 | `cookies_from_browser` | done | not tested |
 | YouTube needs a JS runtime (deno/node used if installed) | same as before | not tested |
@@ -122,7 +122,7 @@ whole time, and the loopback refuses then (see "Not done / not verified").
   headphones (Discord was running; the loopback refuses). `--audio-check loopback` is ready to
   run when nobody is in voice. The Python loopback result (flat 31 Hz–19 kHz, −89 dB THD+N, 0
   dropouts, 0 ppm) was measured on the same WASAPI-converted endpoints.
-- **yt-dlp.exe not bundled** until a download is approved; imports need it.
+- yt-dlp.exe is bundled (official build, checksum verified) but no real import has been run with it.
 - **Uninstaller not ported**: the release README says to delete the folder. The Python
   `Uninstall JondisBoard.exe` doesn't know the new files (`yt-dlp.exe`, `config.backup.json`).
 - No keyboard navigation of the grid (same as Python).
