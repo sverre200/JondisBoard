@@ -7,9 +7,27 @@ from _harness import GROUP, GROUPED, Suite
 def main():
     s = Suite("layout")
     A = s.A
+    # every opacity the main window is given while it opens: hidden while it's built, then shown
+    # at once (no fade-in: that was taken out on request)
+    alphas = []
+    real_attributes = A.ctk.CTk.attributes
+
+    def attributes(self, *args):
+        if len(args) == 2 and args[0] == "-alpha":
+            alphas.append(round(float(args[1]), 3))
+        return real_attributes(self, *args)
+    A.ctk.CTk.attributes = attributes
     app = s.open()
     root, at, check = s.root, s.at, s.check
     state = {}
+
+    def opening():
+        A.ctk.CTk.attributes = real_attributes
+        # 0 while built, an invisible 1 % while it paints (Windows won't draw a 0 % window), then 100 %
+        seen = sorted(set(alphas))
+        check("the window appears at once, no fade-in", seen == [0.0, 0.01, 1.0] and alphas[-1] == 1.0
+              and app._ready)
+    at(0, opening)
 
     def clean(page):
         ts = [page.tiles[n] for n in app.dragger._visible()]

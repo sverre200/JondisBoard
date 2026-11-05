@@ -59,7 +59,7 @@ def center(w, fx=0.5, fy=0.5):
 
 class Suite:
     """One test suite: Suite(name), then open() for the app, at(ms, fn) to schedule steps (counted
-    from when the window has faded in), check(name, ok) inside them, and run() at the end."""
+    from when the window is on screen and focused), check(name, ok) inside them, and run() at the end."""
 
     def __init__(self, name, synthetic_pointer=True, stub_play=True):
         self.name = name
@@ -96,7 +96,6 @@ class Suite:
         self.app = A.App(root)
         if self.stub_play:
             self.app.play = lambda n: self.played.append(n)   # count plays, make no sound
-        root.after(100, lambda: (root.lift(), root.focus_force()))
         return self.app
 
     def _ui_error(self, *exc):
@@ -117,8 +116,15 @@ class Suite:
     def run(self, settle_ms=600):
         last = max((ms for ms, _ in self.steps), default=0)
         self.at(last + settle_ms, self._finish)
-        self.root.after(10, lambda: self.app.when_ready(
-            lambda: [self.root.after(ms, fn) for ms, fn in self.steps]))
+        # steps start once the window is on screen AND has focus (like a real launch), since
+        # menus close themselves when another program has the focus
+        root = self.root
+
+        def ready():
+            root.lift()
+            root.focus_force()
+            root.after(150, lambda: [root.after(ms, fn) for ms, fn in self.steps])
+        root.after(10, lambda: self.app.when_ready(ready))
         self.loop()
         return self.done()
 

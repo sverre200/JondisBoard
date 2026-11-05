@@ -2174,7 +2174,7 @@ class App:
         self._freeze_depth = 0
         self.active_menu = None    # open PopupMenu
         self.open_menus = []       # that menu plus its submenus
-        self._ready = False        # True once the window has faded in at startup
+        self._ready = False        # True once the window is on screen at startup
         self._on_ready = []        # things waiting for that (see when_ready)
         self._watching = False     # focus watcher running (see watch_focus)
         self.jobs = {}             # Quick imports in progress: url -> ImportJob
@@ -2183,7 +2183,7 @@ class App:
         self.columns = 0
         SOUNDS.mkdir(exist_ok=True)
 
-        root.attributes("-alpha", 0.0)   # invisible while it's built, then faded in (end of __init__)
+        root.attributes("-alpha", 0.0)   # invisible while it's built, then shown at once (end of __init__)
         root.title("JondisBoard")
         root.geometry(self.cfg.get("geometry") or "940x680")
         root.minsize(640, 480)
@@ -2204,8 +2204,11 @@ class App:
         self.start_audio()
         self._poll_playing()
         root.update_idletasks()
-        animate(root, 220, lambda e: root.attributes("-alpha", e), done=self._became_ready, delay_ms=30,
-                warmup=True)
+        # No fade-in: it appears in one step, fully drawn. Windows doesn't draw a fully see-through
+        # window at all, so animate's warm-up holds it at an invisible 1 % until everything has
+        # painted and frames come on time, then the first real frame jumps straight to 100 %.
+        animate(root, 1, lambda e: root.attributes("-alpha", e if e <= 0.01 else 1.0),
+                done=self._became_ready, delay_ms=30, warmup=True)
         root.after(800, self._prerender_settings)
 
     def _root_configured(self):
@@ -2534,7 +2537,7 @@ class App:
                                                                  done=win.destroy))
 
     def when_ready(self, fn):
-        """Run fn once the window has faded in at startup (popups shouldn't beat it to the screen)."""
+        """Run fn once the window is on screen at startup (popups shouldn't beat it to the screen)."""
         if self._ready:
             fn()
         else:
