@@ -71,6 +71,16 @@ fn settle(h: HWND, ms: u64) {
     }
 }
 
+/// The config with its "geometry" value swapped for `geo`.
+fn regex_free_geometry(cfg: &str, geo: &str) -> String {
+    let key = "\"geometry\"";
+    let Some(i) = cfg.find(key) else { return cfg.to_string() };
+    let rest = &cfg[i + key.len()..];
+    let open = rest.find('"').unwrap() + 1;
+    let close = open + rest[open..].find('"').unwrap();
+    format!("{}{key}{}{geo}{}", &cfg[..i], &rest[..open], &rest[close..])
+}
+
 fn snap(h: HWND, dir: &Path, name: &str) {
     settle(h, 260);
     let p = dir.join(format!("{name}.png"));
@@ -239,6 +249,27 @@ fn snapshots() {
     snap(h, &dir, "16_search_none");
     window::close(h);
     window::pump(50);
+
+    // window sizes: narrow (the sidebar folds by itself), many groups (the list scrolls), the
+    // sidebar folded by choice at a normal size
+    for n in ["Callouts", "Dayz", "Friends", "Hype", "Insults", "Jingles", "Kills", "Memes 2", "Music", "Quotes", "Raid", "Wins"] {
+        std::fs::create_dir_all(s.join(n)).unwrap();
+    }
+    let base_cfg = std::fs::read_to_string(lib.join("config.json")).unwrap();
+    for (name, geo, extra) in [
+        ("18_narrow_720", "720x600+40+30", ""),
+        ("19_many_groups", "960x600+40+30", ""),
+        ("20_sidebar_folded", "1180x720+40+30", r#""sidebar_collapsed": true,"#),
+    ] {
+        let cfg = base_cfg.replacen('{', &format!("{{{extra}"), 1);
+        let cfg = regex_free_geometry(&cfg, geo);
+        std::fs::write(lib.join("config.json"), cfg).unwrap();
+        let hw = window::create(Paths::new(Some(lib.clone())), Instant::now(), None).expect("window");
+        settle(hw, 400);
+        snap(hw, &dir, name);
+        window::close(hw);
+        window::pump(50);
+    }
 
     let empty = std::env::temp_dir().join(format!("jb_snapempty_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&empty);

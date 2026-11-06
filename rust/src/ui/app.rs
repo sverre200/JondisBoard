@@ -296,6 +296,10 @@ pub struct App {
     pub drag: Option<Drag>,
     pub landing: Option<Landing>,
     pub jobs: Vec<Job>,
+    /// how far the sidebar's group list is scrolled
+    pub side_scroll: f32,
+    /// the view the sidebar last scrolled into sight (it follows the open group)
+    pub side_follow: Option<String>,
     next_job: u64,
     /// the group the import dialog's running import goes into ("" = No group)
     pub import_target: Option<String>,
@@ -406,6 +410,8 @@ impl App {
             drag: None,
             landing: None,
             jobs: Vec::new(),
+            side_scroll: 0.0,
+            side_follow: None,
             import_target: None,
             next_job: 1,
             status: ("Starting audio…".into(), Level::Info),

@@ -84,6 +84,8 @@ fn d2d_color(c: Color) -> D2D1_COLOR_F {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Weight {
     Normal,
+    /// 600: titles, names, labels that lead (JondisClip's --fw-strong)
+    Semi,
     Bold,
 }
 
@@ -180,7 +182,11 @@ impl Gfx {
     fn format(&mut self, size: f32, weight: Weight) -> Option<(IDWriteTextFormat, IDWriteInlineObject)> {
         let key = ((size * 100.0) as u32, weight);
         if !self.formats.contains_key(&key) {
-            let wt = if weight == Weight::Bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL };
+            let wt = match weight {
+                Weight::Bold => DWRITE_FONT_WEIGHT_BOLD,
+                Weight::Semi => DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                Weight::Normal => DWRITE_FONT_WEIGHT_NORMAL,
+            };
             // SAFETY: valid factory and arguments.
             unsafe {
                 let f = self

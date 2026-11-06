@@ -9,14 +9,30 @@ use super::gfx::{Align, Canvas, Color, Gfx, Rect, Weight};
 use super::icons::{self, Icon};
 use crate::config::{ALL, NO_GROUP};
 use crate::theme::{self, Rgb, Theme, DANGER, DANGER_HOVER, GROUP_COLORS, WHITE};
+use std::collections::HashMap;
 use std::time::Instant;
 
-pub const TILE_W: f32 = 250.0;
-pub const TILE_H: f32 = 80.0;
-pub const ART: f32 = 52.0;
-pub const GAP: f32 = 6.0;
+// The design system (shared in spirit with JondisClip): 4/8 spacing, 34 px controls, 8 px
+// control corners, 10 px card corners, 12/13/15/16 px type with Semibold for what leads.
+/// a tile's narrowest width (the grid fits as many columns as it can)
+pub const TILE_W: f32 = 224.0;
+pub const TILE_H: f32 = 72.0;
+pub const ART: f32 = 44.0;
+const ART_R: f32 = 8.0;
+const TILE_R: f32 = 10.0;
+const TILE_PAD: f32 = 12.0;
+/// half the space between tiles
+pub const GAP: f32 = 5.0;
 pub const MENU_W: f32 = 220.0;
-pub const SETTINGS_W: f32 = 660.0;
+pub const SETTINGS_W: f32 = 620.0;
+pub const HEADER_H: f32 = 52.0;
+pub const FOOTER_H: f32 = 76.0;
+pub const SIDEBAR_W: f32 = 208.0;
+pub const SIDEBAR_FOLDED_W: f32 = 56.0;
+/// below this window width the sidebar folds by itself
+pub const SIDEBAR_AUTO_FOLD: f32 = 760.0;
+const ROW_H: f32 = 32.0;
+pub const CONTROL_H: f32 = 34.0;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Hit {
@@ -27,6 +43,8 @@ pub enum Hit {
     Theme,
     Settings,
     Search,
+    Sidebar,
+    SidebarToggle,
     Tab(String),
     TabChevron(String),
     NewGroup,
@@ -90,7 +108,16 @@ pub struct Layout {
     /// tile rects in content coordinates (not scrolled), in visible order
     pub tiles: Vec<(u32, Rect)>,
     pub jobs: usize,
+    /// the sidebar's rows (All, No group, groups), as the old tabs were
     pub tabs: Vec<(String, Rect)>,
+    pub sidebar: Rect,
+    /// the scrolling part of the sidebar (the groups) and how far it scrolls
+    pub side_list: Rect,
+    pub side_max: f32,
+    /// where the content (toolbar, board) starts, right of the sidebar
+    pub content_x: f32,
+    /// a label beside a folded sidebar row under the pointer (drawn over the board)
+    pub tooltip: Option<(Rect, String)>,
     pub buttons: Vec<(Hit, Rect)>,
     pub footer_y: f32,
     pub search: Rect,
@@ -138,7 +165,7 @@ impl App {
     }
 
     pub fn button_width(&self, g: &mut Gfx, label: &str, icon: bool, kind: Kind) -> f32 {
-        let wt = if kind == Kind::Primary { Weight::Bold } else { Weight::Normal };
+        let wt = if kind == Kind::Primary { Weight::Semi } else { Weight::Normal };
         let tw = if label.is_empty() { 0.0 } else { g.measure(label, 13.0, wt) };
         tw + if icon && !label.is_empty() { 22.0 } else if icon { 14.0 } else { 0.0 } + if label.is_empty() { 22.0 } else { 32.0 }
     }
@@ -155,6 +182,7 @@ impl App {
             Kind::Primary => (t.accent, t.accent_hover, t.accent_text, None),
             Kind::Secondary if toggled => (t.accent_soft, t.accent_soft_hover, t.text, Some(t.accent_edge)),
             Kind::Secondary => (t.card, t.card_hover, t.text, Some(t.border)),
+            // ghost buttons sit on whatever is under them (header, board, cards)
             Kind::Ghost => (t.bg, t.card, t.muted, None),
             Kind::Danger => (DANGER, DANGER_HOVER, WHITE, None),
         };
@@ -167,11 +195,11 @@ impl App {
         let ghost_idle = kind == Kind::Ghost && fill == t.bg;
         if let Some(b) = border {
             let bc = self.anim.color(key("btnb", hkey(&hit)), b, MOTION_OPEN);
-            c.card(r, 10.0, fill, bc);
+            c.card(r, 8.0, fill, bc);
         } else if !ghost_idle {
-            c.fill_rrect(r, 10.0, fill);
+            c.fill_rrect(r, 8.0, fill);
         }
-        let wt = if kind == Kind::Primary { Weight::Bold } else { Weight::Normal };
+        let wt = if kind == Kind::Primary { Weight::Semi } else { Weight::Normal };
         let tw = if label.is_empty() { 0.0 } else { g.measure(label, 13.0, wt) };
         let content = tw + if icon.is_some() { if label.is_empty() { 14.0 } else { 22.0 } } else { 0.0 };
         let mut cx = r.x + (r.w - content) / 2.0;
@@ -190,7 +218,7 @@ impl App {
     fn toggle(&mut self, c: &mut Canvas, x: f32, y: f32, on: bool, id: u64, hover: bool) {
         let t = self.theme();
         let k = self.anim.value(key("toggle", id), if on { 1.0 } else { 0.0 }, MOTION_OPEN);
-        let off = if hover { t.border.mix(t.text, 0.1) } else { t.border };
+        let off = if hover { t.border_strong.mix(t.text, 0.08) } else { t.border_strong };
         let onc = if hover { t.accent.mix(WHITE, 0.12) } else { t.accent };
         c.fill_rrect(Rect::new(x, y, 40.0, 22.0), 11.0, off.mix(onc, k));
         let knob = t.text.mix(t.bg, 0.15).mix(WHITE, k);
@@ -232,14 +260,16 @@ impl App {
         self.layout = Layout { w, h, scroll_to, board_scroll_speed, ..Default::default() };
         c.begin(t.bg);
         self.upload_pictures(c);
-        let footer_h = 87.0;
-        let footer_y = (h - footer_h).max(200.0);
+        let footer_y = (h - FOOTER_H).max(200.0);
         self.layout.footer_y = footer_y;
+        let side_w = if self.sidebar_collapsed(w) { SIDEBAR_FOLDED_W } else { SIDEBAR_W };
+        self.layout.content_x = side_w;
         self.header(c, g, w);
-        self.toolbar(c, g, w);
-        let tabs_bottom = self.group_tabs(c, g, w);
-        self.board(c, g, Rect::new(16.0, tabs_bottom, w - 26.0, footer_y - tabs_bottom));
+        self.sidebar(c, g, Rect::new(0.0, HEADER_H, side_w, footer_y - HEADER_H));
+        let top = self.toolbar(c, g, Rect::new(side_w, HEADER_H, w - side_w, footer_y - HEADER_H));
+        self.board(c, g, Rect::new(side_w + 15.0, top, w - side_w - 15.0 - 8.0, footer_y - top));
         self.footer(c, g, w, footer_y);
+        self.tooltip(c, g);
         self.settings_panel(c, g);
         // a dialog's own menu (its Group dropdown) goes over the dialog, the rest under its scrim
         let menus_over_dialog = self.dialog.is_some();
@@ -284,10 +314,14 @@ impl App {
 
     // ---------------------------------------------------------------- header
 
+    /// The header strip (the title bar above it is the same colour): logo, name and count on the
+    /// left; audio status, Theme and Settings on the right.
     fn header(&mut self, c: &mut Canvas, g: &mut Gfx, w: f32) {
         let t = self.theme();
+        c.fill_rect(Rect::new(0.0, 0.0, w, HEADER_H), t.surface);
+        c.fill_rect(Rect::new(0.0, HEADER_H - 1.0, w, 1.0), t.border);
         // logo (the same geometry as the icon)
-        let (lx, ly, ls) = (24.0, 23.0, 36.0);
+        let (lx, ly, ls) = (16.0, 13.0, 26.0);
         let (tile, bars) = super::logo::shapes(ls, true);
         if let Some([x, y, tw, th, r]) = tile {
             c.fill_rrect(Rect::new(lx + x, ly + y, tw, th), r, theme::logo_tile(&t));
@@ -295,136 +329,287 @@ impl App {
         for [x, y, bw, bh, r] in bars {
             c.fill_rrect(Rect::new(lx + x, ly + y, bw, bh), r, t.accent);
         }
-        c.text(g, 72.0, 17.0, "JondisBoard", 22.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
+        let (nw, _) = c.text(g, 52.0, 15.0, "JondisBoard", 15.0, Weight::Semi, 0.0, 1, Align::Left, t.text);
         let n = self.clips.len();
-        c.text(g, 72.0, 46.0, &format!("{n} sound{}", if n == 1 { "" } else { "s" }), 12.0, Weight::Normal, 0.0, 1, Align::Left, t.muted);
-        // right side, right to left: Settings, Theme, status pill
+        c.text(g, 52.0 + nw + 10.0, 17.5, &format!("{n} sound{}", if n == 1 { "" } else { "s" }), 12.0, Weight::Normal, 0.0, 1, Align::Left, t.faint);
+        // right side, right to left: Settings, Theme, status
+        let (by, bh) = ((HEADER_H - CONTROL_H) / 2.0, CONTROL_H);
         let sw = self.button_width(g, "Settings", true, Kind::Secondary);
-        let sx = w - 24.0 - sw;
+        let sx = w - 16.0 - sw;
         let open = self.settings_open;
-        self.button(c, g, sx, 23.0, sw, 36.0, "Settings", Some(Icon::Sliders), Kind::Secondary, Hit::Settings, open);
-        let tw = g.measure("Theme", 13.0, Weight::Normal) + 22.0 + 32.0;
-        let tx = sx - 8.0 - tw;
-        let tr = self.button(c, g, tx, 23.0, tw, 36.0, "", None, Kind::Secondary, Hit::Theme, false);
+        self.button(c, g, sx, by, sw, bh, "Settings", Some(Icon::Sliders), Kind::Secondary, Hit::Settings, open);
         let label_w = g.measure("Theme", 13.0, Weight::Normal);
+        let tw = label_w + 22.0 + 32.0;
+        let tx = sx - 8.0 - tw;
+        let tr = self.button(c, g, tx, by, tw, bh, "", None, Kind::Secondary, Hit::Theme, false);
         let cx = tr.x + (tr.w - label_w - 22.0) / 2.0;
-        c.fill_circle(cx + 6.0, tr.cy(), 6.0, t.accent);
+        c.fill_circle(cx + 6.0, tr.cy(), 5.0, t.accent);
         c.text(g, cx + 22.0, tr.cy() - 9.0, "Theme", 13.0, Weight::Normal, 0.0, 1, Align::Left, t.text);
-        // status pill
+        // audio status: a quiet pill (colour only in the dot and the word)
         let (text, level) = self.status.clone();
         let color = if level == Level::Info { t.muted } else { level.color(&t) };
-        let pw = g.measure(&text, 12.0, Weight::Bold) + 8.0 + 8.0 + 30.0;
-        let pr = Rect::new(tx - 10.0 - pw, 26.0, pw, 30.0);
-        c.fill_rrect(pr, 15.0, t.bg.mix(color, 0.12));
-        c.fill_circle(pr.x + 17.0, pr.cy(), 4.0, color);
-        c.text(g, pr.x + 29.0, pr.cy() - 8.0, &text, 12.0, Weight::Bold, 0.0, 1, Align::Left, color);
+        let pw = g.measure(&text, 12.0, Weight::Semi) + 32.0;
+        let pr = Rect::new(tx - 12.0 - pw, (HEADER_H - 26.0) / 2.0, pw, 26.0);
+        c.card(pr, 13.0, t.bg.mix(color, 0.08), t.border.mix(color, 0.25));
+        c.fill_circle(pr.x + 13.0, pr.cy(), 3.5, color);
+        c.text(g, pr.x + 23.0, pr.cy() - 8.0, &text, 12.0, Weight::Semi, 0.0, 1, Align::Left, color);
     }
 
-    fn toolbar(&mut self, c: &mut Canvas, g: &mut Gfx, w: f32) {
+    // ---------------------------------------------------------------- sidebar
+
+    /// Folded to icons when asked, or when the window is too narrow for both.
+    pub fn sidebar_collapsed(&self, w: f32) -> bool {
+        self.cfg.sidebar_collapsed || w < SIDEBAR_AUTO_FOLD
+    }
+
+    /// The group list on the left (JondisClip's folder sidebar): All sounds and No group, the
+    /// groups with their colour and count, New group at the bottom. Rows are the old group tabs'
+    /// hits (`Hit::Tab`), so clicking, right-clicking and dropping sounds on them work the same.
+    fn sidebar(&mut self, c: &mut Canvas, g: &mut Gfx, r: Rect) {
         let t = self.theme();
-        let y = 82.0;
-        let mut x = 24.0;
-        let r = self.button(c, g, x, y, 0.0, 36.0, "Quick import", Some(Icon::Bolt), Kind::Primary, Hit::QuickImport, false);
+        let folded = r.w < SIDEBAR_W;
+        self.layout.sidebar = r;
+        c.fill_rect(r, t.surface);
+        c.fill_rect(Rect::new(r.right() - 1.0, r.y, 1.0, r.h), t.border);
+        self.hit(r, Hit::Sidebar);
+        let pad = 8.0;
+        let (x, w) = (r.x + pad, r.w - 2.0 * pad - 1.0);
+        let mut y = r.y + 10.0;
+        // title row + fold button (hidden while the window is too narrow to unfold)
+        if !folded {
+            c.text(g, x + 8.0, y + 7.0, "SOUNDS", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
+        }
+        if self.layout.w >= SIDEBAR_AUTO_FOLD {
+            let fr = if folded { Rect::new(r.x + (r.w - 28.0) / 2.0, y, 28.0, 28.0) } else { Rect::new(x + w - 28.0, y, 28.0, 28.0) };
+            let hov = self.is_hover(&Hit::SidebarToggle);
+            let bg = self.anim.color(key("sbt", 0), if hov { t.card_hover } else { t.surface }, if hov { MOTION_HOVER } else { MOTION_UNHOVER });
+            if bg != t.surface {
+                c.fill_rrect(fr, 6.0, bg);
+            }
+            icons::draw(c, g, if folded { Icon::ChevronRight } else { Icon::ChevronLeft }, fr.cx() - 6.0, fr.cy() - 6.0, 12.0, if hov { t.text } else { t.faint });
+            self.hit(fr, Hit::SidebarToggle);
+        }
+        y += 36.0;
+        let tabs = self.tabs();
+        let counts: HashMap<String, usize> = tabs.iter().map(|(k, _, n)| (k.clone(), *n)).collect();
+        let no_group = self.clips.iter().filter(|c| c.group.is_empty()).count();
+        let mut library = vec![(ALL.to_string(), "All sounds".to_string(), self.clips.len())];
+        if !self.groups.is_empty() {
+            library.push((NO_GROUP.to_string(), "No group".to_string(), no_group));
+        }
+        for (k, label, n) in library {
+            self.sidebar_row(c, g, Rect::new(x, y, w, ROW_H), &k, &label, n, folded);
+            y += ROW_H + 2.0;
+        }
+        // the groups scroll when there are more than fit (New group stays at the bottom)
+        let bottom = r.bottom() - pad - ROW_H - 8.0;
+        y += 10.0;
+        if !self.groups.is_empty() {
+            if folded {
+                c.fill_rect(Rect::new(x + 8.0, y - 5.0, w - 16.0, 1.0), t.border);
+            } else {
+                c.text(g, x + 8.0, y, "GROUPS", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
+                y += 24.0;
+            }
+        }
+        let list = Rect::new(r.x, y, r.w - 1.0, (bottom - y).max(0.0));
+        let content = self.groups.len() as f32 * (ROW_H + 2.0);
+        let max = (content - list.h).max(0.0);
+        self.layout.side_list = list;
+        self.layout.side_max = max;
+        // a newly opened group scrolls into sight
+        let view = self.view_key();
+        if self.side_follow.as_deref() != Some(view.as_str()) && list.h > 0.0 {
+            if let Some(i) = self.groups.iter().position(|g| *g == view) {
+                let ry = i as f32 * (ROW_H + 2.0);
+                if ry < self.side_scroll {
+                    self.side_scroll = ry;
+                } else if ry + ROW_H > self.side_scroll + list.h {
+                    self.side_scroll = ry + ROW_H - list.h;
+                }
+            }
+            self.side_follow = Some(view);
+        }
+        self.side_scroll = self.side_scroll.clamp(0.0, max);
+        c.push_clip(list);
+        let mut gy = y - self.side_scroll;
+        for grp in self.groups.clone() {
+            let n = counts.get(&grp).copied().unwrap_or(0);
+            if gy + ROW_H >= list.y && gy <= list.bottom() {
+                self.sidebar_row(c, g, Rect::new(x, gy, w, ROW_H), &grp, &grp, n, folded);
+            }
+            gy += ROW_H + 2.0;
+        }
+        c.pop_clip();
+        if max > 0.0 {
+            // a thin bar shows there's more
+            let th = (list.h / content * list.h).max(24.0);
+            let ty = list.y + (list.h - th) * (self.side_scroll / max);
+            c.fill_rrect(Rect::new(r.right() - 5.0, ty, 3.0, th), 1.5, t.border_strong);
+        }
+        // New group
+        let nr = Rect::new(x, r.bottom() - pad - ROW_H, w, ROW_H);
+        c.fill_rect(Rect::new(r.x, nr.y - 8.0, r.w - 1.0, 1.0), t.border);
+        let hov = self.is_hover(&Hit::NewGroup);
+        if folded && hov {
+            self.layout.tooltip = Some((nr, "New group".into()));
+        }
+        let bg = self.anim.color(key("sbrow", hkey(&Hit::NewGroup)), if hov { t.card_hover } else { t.surface }, if hov { MOTION_HOVER } else { MOTION_UNHOVER });
+        if bg != t.surface {
+            c.fill_rrect(nr, 8.0, bg);
+        }
+        let col = if hov { t.text } else { t.muted };
+        if folded {
+            icons::draw(c, g, Icon::Plus, nr.cx() - 6.0, nr.cy() - 6.0, 12.0, col);
+        } else {
+            icons::draw(c, g, Icon::Plus, nr.x + 11.0, nr.cy() - 6.0, 12.0, col);
+            c.text(g, nr.x + 33.0, nr.cy() - 9.0, "New group", 13.0, Weight::Normal, 0.0, 1, Align::Left, col);
+        }
+        self.hit(nr, Hit::NewGroup);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sidebar_row(&mut self, c: &mut Canvas, g: &mut Gfx, r: Rect, k: &str, label: &str, n: usize, folded: bool) {
+        let t = self.theme();
+        let custom = k != ALL && k != NO_GROUP;
+        let hit = Hit::Tab(k.to_string());
+        let more = Hit::TabChevron(k.to_string());
+        let hover = (self.is_hover(&hit) || self.is_hover(&more)) && self.drag.is_none();
+        let on = self.view_key() == k;
+        let dropping = self.drag.as_ref().and_then(|d| d.tab.as_deref()) == Some(k);
+        let (fill, edge) = if dropping {
+            (t.surface.mix(t.accent, 0.14), t.accent)
+        } else if on {
+            (t.card, t.card)
+        } else if hover {
+            (t.card_hover.mix(t.surface, 0.35), t.surface)
+        } else {
+            (t.surface, t.surface)
+        };
+        let ms = if on || dropping { MOTION_OPEN } else if hover { MOTION_HOVER } else { MOTION_UNHOVER };
+        let fill = self.anim.color(key("sbrow", hkey(&hit)), fill, ms);
+        let edge = self.anim.color(key("sbedge", hkey(&hit)), edge, ms);
+        if fill != t.surface || edge != t.surface {
+            c.card(r, 8.0, fill, edge);
+        }
+        if on && !dropping {
+            // the open view: a short accent bar, like JondisClip's active navigation
+            c.fill_rrect(Rect::new(r.x, r.cy() - 8.0, 3.0, 16.0), 1.5, t.accent);
+        }
+        let text_col = if on || hover || dropping { t.text } else { t.muted };
+        let ix = if folded { r.cx() - 7.0 } else { r.x + 10.0 };
+        match k {
+            ALL => icons::draw(c, g, Icon::Grid, ix, r.cy() - 7.0, 14.0, if on { t.accent } else { text_col }),
+            NO_GROUP => icons::draw(c, g, Icon::Folder, ix, r.cy() - 7.0, 14.0, text_col),
+            _ => {
+                let gc = self.group_color(k).unwrap_or(t.muted);
+                c.fill_circle(ix + 7.0, r.cy(), if folded { 5.0 } else { 4.5 }, gc);
+            }
+        }
+        self.layout.tabs.push((k.to_string(), r));
+        self.hit(r, hit);
+        if folded {
+            if hover {
+                self.layout.tooltip = Some((r, format!("{label}  ·  {n}")));
+            }
+            return;
+        }
+        let show_more = custom && hover;
+        let right = r.right() - if show_more { 34.0 } else { 10.0 };
+        let cw = g.measure(&n.to_string(), 12.0, Weight::Normal);
+        let wt = if on { Weight::Semi } else { Weight::Normal };
+        c.text(g, r.x + 32.0, r.cy() - 9.0, label, 13.0, wt, (right - cw - 8.0 - (r.x + 32.0)).max(10.0), 1, Align::Left, text_col);
+        c.text(g, right - cw, r.cy() - 8.5, &n.to_string(), 12.0, Weight::Normal, 0.0, 1, Align::Left, t.faint);
+        if show_more {
+            let mr = Rect::new(r.right() - 30.0, r.cy() - 12.0, 26.0, 24.0);
+            if self.is_hover(&more) {
+                c.fill_rrect(mr, 6.0, fill.mix(t.text, 0.08));
+            }
+            icons::draw(c, g, Icon::More, mr.x + 5.0, mr.y + 4.0, 16.0, t.muted);
+            self.hit(mr, more);
+        }
+    }
+
+    /// The folded sidebar's labels: a small chip to the right of the row.
+    fn tooltip(&mut self, c: &mut Canvas, g: &mut Gfx) {
+        let Some((r, text)) = self.layout.tooltip.take() else { return };
+        if self.drag.is_some() || !self.menus.is_empty() {
+            return;
+        }
+        let t = self.theme();
+        let tw = g.measure(&text, 12.0, Weight::Normal);
+        let tr = Rect::new(r.right() + 10.0, r.cy() - 13.0, tw + 20.0, 26.0);
+        c.shadow(tr, 6.0, 0.8);
+        c.card(tr, 6.0, t.elevated, t.edge);
+        c.text(g, tr.x + 10.0, tr.y + 4.5, &text, 12.0, Weight::Normal, 0.0, 1, Align::Left, t.text);
+    }
+
+    // ---------------------------------------------------------------- toolbar
+
+    /// The actions row and the view's heading, over the board. Returns where the board starts.
+    fn toolbar(&mut self, c: &mut Canvas, g: &mut Gfx, area: Rect) -> f32 {
+        let t = self.theme();
+        let y = area.y + 14.0;
+        let (x0, right) = (area.x + 20.0, area.right() - 20.0);
+        let search_w = (area.w * 0.3).clamp(170.0, 280.0);
+        // the secondary actions lose their words when the row gets tight
+        let full = self.button_width(g, "Quick import", true, Kind::Primary)
+            + self.button_width(g, "Import link…", true, Kind::Secondary)
+            + self.button_width(g, "Add files", true, Kind::Secondary)
+            + CONTROL_H
+            + 3.0 * 8.0;
+        let compact = x0 + full + 16.0 + search_w > right;
+        let mut x = x0;
+        let r = self.button(c, g, x, y, 0.0, CONTROL_H, "Quick import", Some(Icon::Bolt), Kind::Primary, Hit::QuickImport, false);
         x = r.right() + 8.0;
-        let r = self.button(c, g, x, y, 0.0, 36.0, "Import link…", Some(Icon::Link), Kind::Secondary, Hit::ImportLink, false);
+        let r = self.button(c, g, x, y, if compact { CONTROL_H } else { 0.0 }, CONTROL_H, if compact { "" } else { "Import link…" }, Some(Icon::Link), Kind::Secondary, Hit::ImportLink, false);
         x = r.right() + 8.0;
-        let r = self.button(c, g, x, y, 0.0, 36.0, "Add files", Some(Icon::Note), Kind::Secondary, Hit::AddFiles, false);
+        let r = self.button(c, g, x, y, if compact { CONTROL_H } else { 0.0 }, CONTROL_H, if compact { "" } else { "Add files" }, Some(Icon::Note), Kind::Secondary, Hit::AddFiles, false);
         x = r.right() + 8.0;
-        self.button(c, g, x, y, 36.0, 36.0, "", Some(Icon::More), Kind::Ghost, Hit::More, false);
+        self.button(c, g, x, y, CONTROL_H, CONTROL_H, "", Some(Icon::More), Kind::Ghost, Hit::More, false);
         // search
-        let sr = Rect::new(w - 24.0 - 240.0, y + 1.0, 240.0, 34.0);
+        let sr = Rect::new(right - search_w, y, search_w, CONTROL_H);
         let focused = self.search_focused;
-        let ring = self.anim.color(key("search", 0), if focused { t.accent_edge } else { t.border }, if focused { MOTION_HOVER } else { MOTION_UNHOVER });
-        c.card(sr, 10.0, t.card, ring);
-        icons::draw(c, g, Icon::Search, sr.x + 11.0, sr.cy() - 7.0, 14.0, t.muted);
+        let hov = self.is_hover(&Hit::Search);
+        let ring = self.anim.color(key("search", 0), if focused { t.accent } else if hov { t.border_strong } else { t.border }, if focused || hov { MOTION_HOVER } else { MOTION_UNHOVER });
+        c.card(sr, 8.0, t.card, ring);
+        icons::draw(c, g, Icon::Search, sr.x + 11.0, sr.cy() - 7.0, 14.0, t.faint);
         let tr = Rect::new(sr.x + 34.0, sr.y + 2.0, sr.w - 44.0, sr.h - 4.0);
         let caret = self.caret_visible();
         let sel = t.accent.mix(t.card, 0.55);
-        self.search.draw(c, g, tr, focused, caret, t.text, t.muted, sel);
+        self.search.draw(c, g, tr, focused, caret, t.text, t.faint, sel);
         self.layout.search = sr;
         self.hit(sr, Hit::Search);
+        // heading: what the board shows, and how many
+        let hy = y + CONTROL_H + 18.0;
+        let view = self.view_key();
+        let (title, dot) = if !self.query.is_empty() {
+            ("Search results".to_string(), None)
+        } else if view == ALL {
+            ("All sounds".to_string(), None)
+        } else if view == NO_GROUP {
+            ("No group".to_string(), None)
+        } else {
+            (view.clone(), self.group_color(&view))
+        };
+        let mut tx = x0;
+        if let Some(d) = dot {
+            c.fill_circle(tx + 5.0, hy + 11.0, 5.0, d);
+            tx += 18.0;
+        }
+        let (tw, _) = c.text(g, tx, hy, &title, 16.0, Weight::Semi, (right - tx - 120.0).max(40.0), 1, Align::Left, t.text);
+        // without a search the count is a plain tally (visible() lowercases every name)
+        let n = if self.query.is_empty() {
+            if view == ALL { self.clips.len() } else { self.clips.iter().filter(|c| c.group == view).count() }
+        } else {
+            self.visible().len()
+        };
+        c.text(g, tx + tw + 10.0, hy + 4.0, &format!("{n} sound{}", if n == 1 { "" } else { "s" }), 12.0, Weight::Normal, 0.0, 1, Align::Left, t.faint);
+        hy + 30.0
     }
 
     pub fn caret_visible(&self) -> bool {
         (self.caret_since.elapsed().as_millis() / 530) % 2 == 0
-    }
-
-    fn tab_width(&self, g: &mut Gfx, key: &str, label: &str, n: usize) -> f32 {
-        let custom = key != ALL && key != NO_GROUP;
-        let name = g.measure(label, 13.0, Weight::Normal);
-        let count = g.measure(&n.to_string(), 12.0, Weight::Normal);
-        (if key == ALL { 15.0 } else { 13.0 + 8.0 + 8.0 }) + name + 7.0 + count + if custom { 6.0 + 18.0 + 7.0 } else { 15.0 }
-    }
-
-    /// The group tabs (they wrap onto more rows when there are many). Returns the bottom.
-    fn group_tabs(&mut self, c: &mut Canvas, g: &mut Gfx, w: f32) -> f32 {
-        let t = self.theme();
-        let tabs = self.tabs();
-        let current = self.view_key();
-        let drop_tab = self.drag.as_ref().and_then(|d| d.tab.clone());
-        let (mut x, mut y) = (24.0, 128.0);
-        let max_x = w - 24.0;
-        for (k, label, n) in tabs {
-            let tw = self.tab_width(g, &k, &label, n);
-            if x + tw > max_x && x > 24.0 {
-                x = 24.0;
-                y += 40.0;
-            }
-            let r = Rect::new(x, y + 2.0, tw, 32.0);
-            let custom = k != ALL && k != NO_GROUP;
-            let color = self.group_color(&k).unwrap_or(if k == ALL { t.accent } else { t.muted });
-            let hit = Hit::Tab(k.clone());
-            let hover = self.is_hover(&hit) || self.is_hover(&Hit::TabChevron(k.clone()));
-            let on = current == k;
-            let dropping = drop_tab.as_deref() == Some(k.as_str());
-            let (fg, border, count) = if dropping {
-                (t.card.mix(color, 0.42), color, t.text)
-            } else if on {
-                (t.card.mix(color, 0.24), t.border.mix(color, 0.75), t.muted.mix(t.text, 0.55))
-            } else if hover {
-                (t.card, t.border.mix(t.text, 0.12), t.muted)
-            } else {
-                (t.bg, t.border, t.muted)
-            };
-            let ms = if on || dropping { MOTION_OPEN } else if hover { MOTION_HOVER } else { MOTION_UNHOVER };
-            let fg = self.anim.color(key("tabf", hkey(&hit)), fg, ms);
-            let border = self.anim.color(key("tabb", hkey(&hit)), border, ms);
-            c.card(r, 16.0, fg, border);
-            let mut cx = r.x;
-            if k != ALL {
-                c.fill_circle(cx + 13.0 + 4.0, r.cy(), 4.0, color);
-                cx += 13.0 + 8.0 + 8.0;
-            } else {
-                cx += 15.0;
-            }
-            let (nw, _) = c.text(g, cx, r.cy() - 9.0, &label, 13.0, Weight::Normal, 0.0, 1, Align::Left, t.text);
-            cx += nw + 7.0;
-            c.text(g, cx, r.cy() - 8.5, &n.to_string(), 12.0, Weight::Normal, 0.0, 1, Align::Left, count);
-            self.hit(r, hit);
-            if custom {
-                let cr = Rect::new(r.right() - 7.0 - 18.0, r.cy() - 11.0, 18.0, 22.0);
-                let ch = Hit::TabChevron(k.clone());
-                if self.is_hover(&ch) {
-                    c.fill_rrect(cr, 6.0, fg.mix(t.text, 0.1));
-                }
-                icons::draw(c, g, Icon::ChevronDown, cr.x + 4.0, cr.y + 6.0, 10.0, t.muted);
-                self.hit(cr, ch);
-            }
-            self.layout.tabs.push((k, r));
-            x += tw + 8.0;
-        }
-        // + New group
-        let nw = g.measure("New group", 13.0, Weight::Normal) + 22.0 + 32.0;
-        if x + nw > max_x && x > 24.0 {
-            x = 24.0;
-            y += 40.0;
-        }
-        let r = self.button(c, g, x, y + 2.0, nw, 32.0, "", None, Kind::Ghost, Hit::NewGroup, false);
-        let lw = g.measure("New group", 13.0, Weight::Normal);
-        let cx = r.x + (r.w - lw - 22.0) / 2.0;
-        icons::draw(c, g, Icon::Plus, cx + 2.0, r.cy() - 5.0, 10.0, t.muted);
-        c.text(g, cx + 22.0, r.cy() - 9.0, "New group", 13.0, Weight::Normal, 0.0, 1, Align::Left, t.muted);
-        y + 36.0 + 13.0
     }
 
     // ---------------------------------------------------------------- board
@@ -522,7 +707,7 @@ impl App {
             }
             if Some(id) == dragging {
                 // the spot it would land in: a faint copy
-                c.card(r, 14.0, t.card.mix(t.bg, 0.6), t.border.mix(t.accent, 0.25));
+                c.card(r, TILE_R, t.card.mix(t.bg, 0.6), t.border.mix(t.accent, 0.35));
                 continue;
             }
             self.tile(c, g, id, r, &view);
@@ -533,16 +718,16 @@ impl App {
         c.pop_clip();
         // scrollbar
         if max > 0.0 {
-            let track = Rect::new(board.right() - 10.0, board.y + 4.0, 8.0, board.h - 8.0);
+            let track = Rect::new(board.right() - 4.0, board.y + 4.0, 6.0, board.h - 8.0);
             let th = (board.h / content_h * track.h).max(32.0);
             let ty = track.y + (track.h - th) * (scroll / max);
-            let thumb = Rect::new(track.x, ty, 8.0, th);
+            let thumb = Rect::new(track.x, ty, 6.0, th);
             let hover = self.is_hover(&Hit::Scrollbar) || self.scrollbar_drag.is_some();
-            let col = self.anim.color(key("sb", 0), if hover { t.card_hover } else { t.card }, MOTION_HOVER);
-            c.fill_rrect(thumb, 4.0, col);
+            let col = self.anim.color(key("sb", 0), if hover { t.faint } else { t.border_strong }, MOTION_HOVER);
+            c.fill_rrect(thumb, 3.0, col);
             self.layout.track = track;
             self.layout.thumb = thumb;
-            self.hit(Rect::new(track.x - 4.0, track.y, 14.0, track.h), Hit::Scrollbar);
+            self.hit(Rect::new(track.x - 6.0, track.y, 14.0, track.h), Hit::Scrollbar);
         }
     }
 
@@ -552,7 +737,7 @@ impl App {
             let cx = board.cx();
             let y = board.y + 64.0;
             self.placeholder_art(c, g, Rect::new(cx - ART / 2.0, y, ART, ART), t.accent, None, true);
-            c.text(g, board.x, y + ART + 14.0, "No sounds yet", 18.0, Weight::Bold, board.w, 1, Align::Center, t.text);
+            c.text(g, board.x, y + ART + 14.0, "No sounds yet", 18.0, Weight::Semi, board.w, 1, Align::Center, t.text);
             c.text(g, board.x, y + ART + 44.0, "Copy an Instagram or YouTube link, then press Quick import (or Ctrl+V).", 13.0, Weight::Normal, board.w, 1, Align::Center, t.muted);
             let w1 = self.button_width(g, "Quick import", true, Kind::Primary);
             let w2 = self.button_width(g, "Import link…", true, Kind::Secondary);
@@ -569,15 +754,16 @@ impl App {
     /// The square on the left of a tile without a picture: its group's colour with a note.
     fn placeholder_art(&mut self, c: &mut Canvas, g: &mut Gfx, r: Rect, tint: Rgb, frame: Option<usize>, note: bool) {
         let t = self.theme();
-        c.fill_rrect(r, r.w * 0.19, t.card.mix(tint, 0.28));
+        // a calm square: the group's (or accent's) colour only as a tint, never a solid block
+        c.fill_rrect(r, ART_R, t.card_hover.mix(tint, 0.14));
         if frame.is_none() && note {
-            let s = r.w * 0.42;
-            icons::draw(c, g, Icon::Note, r.cx() - s / 2.0, r.cy() - s / 2.0, s, tint.mix(WHITE, 0.3));
+            let s = r.w * 0.4;
+            icons::draw(c, g, Icon::Note, r.cx() - s / 2.0, r.cy() - s / 2.0, s, tint.mix(t.text, 0.35));
         }
     }
 
     fn equalizer(&self, c: &mut Canvas, r: Rect, frame: usize) {
-        c.fill_rrect(r, r.w * 0.19, theme::BLACK.alpha(120.0 / 255.0));
+        c.fill_rrect(r, ART_R, theme::BLACK.alpha(120.0 / 255.0));
         let n = r.w;
         let (bw, gap) = (n * 0.11, n * 0.07);
         let x0 = r.x + (n - 3.0 * bw - 2.0 * gap) / 2.0;
@@ -608,7 +794,7 @@ impl App {
             let px = (ART * c.scale).ceil() as u32;
             let k = Self::picture_key(path, *stamp, px);
             if c.has_bitmap(k) {
-                c.draw_bitmap_rounded(k, r, r.w * 0.19, 1.0);
+                c.draw_bitmap_rounded(k, r, ART_R, 1.0);
                 drew = true;
             } else if !self.pic_failed.contains(&k) {
                 if self.pic_pending.insert(k) {
@@ -617,7 +803,7 @@ impl App {
                     }
                 }
                 // loading: a plain square (no note, so nothing flips when the picture arrives)
-                c.fill_rrect(r, r.w * 0.19, t.card.mix(tint, 0.28));
+                c.fill_rrect(r, ART_R, t.card_hover.mix(tint, 0.14));
                 drew = true;
             }
         }
@@ -628,7 +814,7 @@ impl App {
             self.equalizer(c, r, f);
         }
         if dim {
-            c.fill_rrect(r, r.w * 0.19, t.bg.alpha(0xa0 as f32 / 255.0));
+            c.fill_rrect(r, ART_R, t.bg.alpha(0xa0 as f32 / 255.0));
         }
     }
 
@@ -638,14 +824,16 @@ impl App {
         let hit = Hit::Tile(id);
         let more = Hit::TileMore(id);
         let hover = (self.is_hover(&hit) || self.is_hover(&more)) && self.drag.is_none();
+        // pressed: held down on it (it plays on release)
+        let pressed = self.is_down(&hit) && self.drag.is_none();
         let playing = self.playing.get(&id).copied();
-        let accent = self.tint(&clip);
         let (fg, border) = match playing {
-            Some(_) => (t.card.mix(accent, if hover { 0.14 } else { 0.1 }), accent),
-            None if hover => (t.card_hover, t.border.mix(t.text, 0.12)),
+            Some(_) => (if hover { t.card_playing.mix(t.accent, 0.05) } else { t.card_playing }, t.accent),
+            None if pressed => (t.card.mix(t.bg, 0.35), t.border_strong),
+            None if hover => (t.card_hover, t.border_strong),
             None => (t.card, t.border),
         };
-        let ms = if hover || playing.is_some() { MOTION_HOVER } else { MOTION_UNHOVER };
+        let ms = if hover || pressed || playing.is_some() { MOTION_HOVER } else { MOTION_UNHOVER };
         let mut fill = self.anim.color(key("tf", id as u64), fg, ms);
         let mut edge = self.anim.color(key("tb", id as u64), border, ms);
         if let Some((since, strength)) = self.flash.get(&id).copied() {
@@ -654,56 +842,58 @@ impl App {
                 self.flash.remove(&id);
             } else {
                 let k = ease_out(e);
-                fill = fg.mix(accent, strength).mix(fill, k);
-                edge = accent.mix(edge, k);
+                fill = fg.mix(t.accent, strength * 0.7).mix(fill, k);
+                edge = t.accent.mix(edge, k);
                 self.anim.keep_alive();
             }
         }
-        c.card(r, 14.0, fill, edge);
-        let art = Rect::new(r.x + 12.0, r.y + 12.0, ART, ART);
+        c.card(r, TILE_R, fill, edge);
+        let art = Rect::new(r.x + TILE_PAD, r.y + (r.h - ART) / 2.0, ART, ART);
         self.tile_art(c, g, &clip, art, playing.is_some(), false);
-        // title: up to 2 lines, "…" if it doesn't fit
-        let title_w = r.w - (12.0 + ART + 12.0 + 30.0);
-        c.text(g, r.x + 76.0, r.y + 9.0, &clip.stem, 13.0, Weight::Bold, title_w.max(20.0), 2, Align::Left, t.text);
-        // info row: duration · group (in All) · hotkey chip
-        let base = r.y + 12.0 + ART;
+        // the name leads: up to 2 lines, "…" if it doesn't fit; room for ⋯ is kept always, so
+        // nothing reflows on hover
+        let tx = art.right() + 12.0;
+        let title_w = r.right() - 30.0 - tx;
+        c.text(g, tx, r.y + 9.0, &clip.stem, 13.0, Weight::Semi, title_w.max(20.0), 2, Align::Left, t.text);
+        // secondary row: duration · group (on All), hotkey keycap on the right
+        let my = r.bottom() - 22.0;
         let meta = match (&clip.failed, clip.duration) {
-            (Some(_), _) => "can't load".to_string(),
+            (Some(_), _) => "Can't load".to_string(),
             (None, Some(d)) => fmt_duration(d),
             (None, None) => "…".to_string(),
         };
-        let meta_color = if clip.failed.is_some() { t.muted.mix(DANGER, 0.6) } else { t.muted };
-        let (mw, _) = c.text(g, r.x + 76.0, base - 16.0, &meta, 12.0, Weight::Normal, 0.0, 1, Align::Left, meta_color);
+        let meta_color = if clip.failed.is_some() { DANGER.mix(t.muted, 0.25) } else { t.muted };
+        let (mw, _) = c.text(g, tx, my, &meta, 12.0, Weight::Normal, 0.0, 1, Align::Left, meta_color);
         let chip = self.hotkey_of(id).map(|b| b.pretty());
-        let chip_w = chip.as_ref().map(|s| g.measure(s, 11.0, Weight::Bold) + 14.0).unwrap_or(0.0);
+        let chip_w = chip.as_ref().map(|s| g.measure(s, 11.0, Weight::Semi) + 12.0).unwrap_or(0.0);
         if view == ALL && !clip.group.is_empty() {
-            let gx = r.x + 76.0 + mw + 10.0;
+            let gx = tx + mw + 9.0;
             let gc = self.group_color(&clip.group).unwrap_or(t.muted);
-            c.fill_circle(gx + 3.5, base - 7.0, 3.5, gc);
-            let avail = r.right() - 12.0 - chip_w - 8.0 - (gx + 11.0);
+            c.fill_circle(gx + 3.0, my + 8.5, 3.0, gc);
+            let avail = r.right() - TILE_PAD - chip_w - 8.0 - (gx + 10.0);
             if avail > 16.0 {
-                c.text(g, gx + 11.0, base - 16.0, &clip.group, 12.0, Weight::Normal, avail, 1, Align::Left, t.muted);
+                c.text(g, gx + 10.0, my, &clip.group, 12.0, Weight::Normal, avail, 1, Align::Left, t.faint);
             }
         }
         if let Some(s) = chip {
-            let cr = Rect::new(r.right() - 12.0 - chip_w, base + 2.0 - 20.0, chip_w, 20.0);
-            c.fill_rrect(cr, 6.0, t.card.mix(t.text, 0.09));
-            c.text(g, cr.x, cr.y + 2.5, &s, 11.0, Weight::Bold, cr.w, 1, Align::Center, t.text);
+            let cr = Rect::new(r.right() - TILE_PAD - chip_w, my - 1.0, chip_w, 19.0);
+            c.card(cr, 5.0, t.bg.mix(t.card, 0.5), t.border_strong);
+            c.text(g, cr.x, cr.y + 2.0, &s, 11.0, Weight::Semi, cr.w, 1, Align::Center, if playing.is_some() { t.text } else { t.muted });
         }
-        // progress bar while playing
+        // progress while playing: a thin line along the card's bottom edge
         if let Some(p) = playing {
-            let track = Rect::new(r.x + 12.0, r.bottom() - 10.0, r.w - 24.0, 3.0);
-            c.fill_rect(track, fill.mix(t.text, 0.08));
-            c.fill_rect(Rect::new(track.x, track.y, track.w * p, track.h), accent);
+            let track = Rect::new(r.x + TILE_R, r.bottom() - 3.0, r.w - 2.0 * TILE_R, 2.0);
+            c.fill_rrect(track, 1.0, fill.mix(t.text, 0.08));
+            c.fill_rrect(Rect::new(track.x, track.y, (track.w * p).max(2.0), 2.0), 1.0, t.accent);
             self.anim.keep_slow();
         }
         // ⋯ on hover (its own menu button)
         if hover {
-            let mr = Rect::new(r.right() - 8.0 - 26.0, r.y + 8.0, 26.0, 24.0);
+            let mr = Rect::new(r.right() - 6.0 - 26.0, r.y + 6.0, 26.0, 24.0);
             if self.is_hover(&more) {
-                c.fill_rrect(mr, 7.0, fill.mix(t.text, 0.1));
+                c.fill_rrect(mr, 6.0, fill.mix(t.text, 0.1));
             }
-            icons::draw(c, g, Icon::More, mr.x + 5.0, mr.y + 4.0, 16.0, t.muted);
+            icons::draw(c, g, Icon::More, mr.x + 5.0, mr.y + 4.0, 16.0, if self.is_hover(&more) { t.text } else { t.muted });
             self.hit(r, hit);
             self.hit(mr, more);
         } else {
@@ -718,88 +908,128 @@ impl App {
         let title = if failed { "Import failed".to_string() } else { "Importing…".to_string() };
         let meta = job.error.clone().unwrap_or_else(|| format!("{}  ·  {}", job.source, job.status));
         let started = job.started;
-        c.card(r, 14.0, t.card, if failed { t.border.mix(DANGER, 0.5) } else { t.border });
-        let art = Rect::new(r.x + 12.0, r.y + 12.0, ART, ART);
+        c.card(r, TILE_R, t.card, if failed { t.border.mix(DANGER, 0.55) } else { t.border });
+        let art = Rect::new(r.x + TILE_PAD, r.y + (r.h - ART) / 2.0, ART, ART);
         if failed {
-            c.fill_rrect(art, 10.0, t.card.mix(DANGER, 0.2));
-            icons::draw(c, g, Icon::X, art.cx() - 8.0, art.cy() - 8.0, 16.0, DANGER);
+            c.fill_rrect(art, ART_R, t.card.mix(DANGER, 0.16));
+            icons::draw(c, g, Icon::X, art.cx() - 7.0, art.cy() - 7.0, 14.0, DANGER);
         } else {
             // the picture square breathes while it works
             let ph = (started.elapsed().as_secs_f32() / 0.76 * std::f32::consts::PI).sin() * 0.5 + 0.5;
-            c.fill_rrect(art, 10.0, t.card_hover.mix(t.card_hover.mix(t.accent, 0.16), ph));
-            icons::draw(c, g, Icon::Link, art.cx() - 9.0, art.cy() - 9.0, 18.0, t.muted);
-            // indeterminate bar
-            let track = Rect::new(r.x + 12.0, r.bottom() - 10.0, r.w - 24.0, 3.0);
-            c.fill_rrect(track, 1.5, t.card_hover);
+            c.fill_rrect(art, ART_R, t.card_hover.mix(t.card_hover.mix(t.accent, 0.14), ph));
+            icons::draw(c, g, Icon::Link, art.cx() - 8.0, art.cy() - 8.0, 16.0, t.muted);
+            // indeterminate line along the bottom edge
+            let track = Rect::new(r.x + TILE_R, r.bottom() - 3.0, r.w - 2.0 * TILE_R, 2.0);
+            c.fill_rrect(track, 1.0, t.card_hover);
             let p = (started.elapsed().as_secs_f32() * 0.6) % 1.4 - 0.2;
-            let seg = 0.3;
-            let a = (p).clamp(0.0, 1.0);
-            let b = (p + seg).clamp(0.0, 1.0);
+            let (a, b) = (p.clamp(0.0, 1.0), (p + 0.3).clamp(0.0, 1.0));
             if b > a {
-                c.fill_rrect(Rect::new(track.x + track.w * a, track.y, track.w * (b - a), 3.0), 1.5, t.accent);
+                c.fill_rrect(Rect::new(track.x + track.w * a, track.y, track.w * (b - a), 2.0), 1.0, t.accent);
             }
             self.anim.keep_slow();
         }
-        c.text(g, r.x + 76.0, r.y + 9.0, &title, 13.0, Weight::Bold, r.w - 76.0 - if failed { 70.0 } else { 12.0 }, 1, Align::Left, t.text);
-        c.text(g, r.x + 76.0, r.y + 12.0 + ART - 16.0, &meta, 12.0, Weight::Normal, r.w - 76.0 - 12.0, 1, Align::Left, if failed { t.muted.mix(DANGER, 0.6) } else { t.muted });
+        let tx = art.right() + 12.0;
+        c.text(g, tx, r.y + 9.0, &title, 13.0, Weight::Semi, r.right() - tx - if failed { 70.0 } else { 12.0 }, 1, Align::Left, t.text);
+        c.text(g, tx, r.bottom() - 22.0, &meta, 12.0, Weight::Normal, r.right() - tx - TILE_PAD, 1, Align::Left, if failed { DANGER.mix(t.muted, 0.25) } else { t.muted });
         self.hit(r, Hit::Job(id));
         if failed {
-            let x = r.right() - 8.0 - 28.0 * 2.0 - 2.0;
-            self.button(c, g, x, r.y + 8.0, 28.0, 26.0, "", Some(Icon::Refresh), Kind::Ghost, Hit::JobRetry(id), false);
-            self.button(c, g, x + 30.0, r.y + 8.0, 28.0, 26.0, "", Some(Icon::X), Kind::Ghost, Hit::JobDismiss(id), false);
+            let x = r.right() - 6.0 - 28.0 * 2.0 - 2.0;
+            self.button(c, g, x, r.y + 6.0, 28.0, 26.0, "", Some(Icon::Refresh), Kind::Ghost, Hit::JobRetry(id), false);
+            self.button(c, g, x + 30.0, r.y + 6.0, 28.0, 26.0, "", Some(Icon::X), Kind::Ghost, Hit::JobDismiss(id), false);
         }
     }
 
     // ---------------------------------------------------------------- footer
 
+    /// The audio strip: what others hear (Mic, Clips, Send my voice) | what you hear (In your
+    /// ears) | Stop all (quiet until something plays) with its hotkey.
     fn footer(&mut self, c: &mut Canvas, g: &mut Gfx, w: f32, y: f32) {
         let t = self.theme();
         c.fill_rect(Rect::new(0.0, y, w, self.layout.h - y), t.surface);
         c.fill_rect(Rect::new(0.0, y, w, 1.0), t.border);
-        let top = y + 1.0 + 14.0;
-        // right: Stop all with its hotkey under it
-        let sx = w - 24.0 - 124.0;
-        let r = self.button(c, g, sx, top, 124.0, 36.0, "", None, Kind::Danger, Hit::StopAll, false);
-        let lw = g.measure("Stop all", 13.0, Weight::Normal);
-        let cx = r.x + (r.w - lw - 20.0) / 2.0;
-        icons::draw(c, g, Icon::Stop, cx, r.cy() - 6.0, 12.0, WHITE);
-        c.text(g, cx + 20.0, r.cy() - 9.0, "Stop all", 13.0, Weight::Normal, 0.0, 1, Align::Left, WHITE);
-        let key_text = self.cfg.stop_hotkey.as_ref().map(|b| format!("Hotkey: {}", b.pretty())).unwrap_or_else(|| "Set hotkey".into());
-        let kr = Rect::new(sx, top + 40.0, 124.0, 18.0);
-        if self.is_hover(&Hit::StopHotkey) {
-            c.fill_rrect(kr, 6.0, t.card);
+        let (left, right) = (20.0, w - 20.0);
+        let title_y = y + 11.0;
+        let row = y + 30.0; // controls row top (CONTROL_H tall)
+        let mid = row + CONTROL_H / 2.0;
+        // Stop all, right
+        let playing = !self.playing.is_empty();
+        let bw = 112.0;
+        let br = Rect::new(right - bw, row, bw, CONTROL_H);
+        let hov = self.is_hover(&Hit::StopAll);
+        let down = self.is_down(&Hit::StopAll);
+        let (fill, edge, ink) = if playing {
+            (if down { DANGER_HOVER.mix(theme::BLACK, 0.16) } else if hov { DANGER_HOVER } else { DANGER }, None, WHITE)
+        } else {
+            (if down { t.card.mix(DANGER, 0.22) } else if hov { t.card.mix(DANGER, 0.14) } else { t.card }, Some(t.border), DANGER.mix(t.text, 0.2))
+        };
+        let fill = self.anim.color(key("stop", 0), fill, if hov || playing { MOTION_HOVER } else { MOTION_UNHOVER });
+        match edge {
+            Some(e) => c.card(br, 8.0, fill, e),
+            None => c.fill_rrect(br, 8.0, fill),
         }
-        c.text(g, kr.x, kr.y + 1.0, &key_text, 11.0, Weight::Normal, kr.w, 1, Align::Center, t.muted);
+        let lw = g.measure("Stop all", 13.0, Weight::Semi);
+        let cx = br.x + (br.w - lw - 20.0) / 2.0;
+        icons::draw(c, g, Icon::Stop, cx, br.cy() - 6.0, 12.0, ink);
+        c.text(g, cx + 20.0, br.cy() - 9.0, "Stop all", 13.0, Weight::Semi, 0.0, 1, Align::Left, ink);
+        self.hit(br, Hit::StopAll);
+        self.layout.buttons.push((Hit::StopAll, br));
+        // its hotkey: a keycap to the left (click to set)
+        let key_text = self.cfg.stop_hotkey.as_ref().map(|b| b.pretty()).unwrap_or_else(|| "Set key".into());
+        let kw = g.measure(&key_text, 11.0, Weight::Semi) + 14.0;
+        let kr = Rect::new(br.x - 8.0 - kw, mid - 11.0, kw, 22.0);
+        let khov = self.is_hover(&Hit::StopHotkey);
+        c.card(kr, 6.0, if khov { t.card_hover } else { t.bg.mix(t.card, 0.5) }, if khov { t.border_strong } else { t.border });
+        c.text(g, kr.x, kr.y + 3.5, &key_text, 11.0, Weight::Semi, kr.w, 1, Align::Center, if khov { t.text } else { t.muted });
         self.hit(kr, Hit::StopHotkey);
-        // Send my voice
+        c.text(g, kr.x, title_y, "PLAYBACK", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
+        // what others hear | what you hear
         let words = "Send my voice";
         let ww = g.measure(words, 13.0, Weight::Normal);
-        let tx = sx - 20.0 - (40.0 + 10.0 + ww);
-        let ty = top + 18.0 - 11.0;
-        let hover = self.is_hover(&Hit::SendVoice);
-        self.toggle(c, tx, ty, self.cfg.mic_passthrough, 1, hover);
-        c.text(g, tx + 50.0, ty + 2.0, words, 13.0, Weight::Normal, 0.0, 1, Align::Left, t.text);
-        self.hit(Rect::new(tx, ty - 6.0, 50.0 + ww, 34.0), Hit::SendVoice);
-        // sliders share the rest
-        let left = 24.0;
-        let avail = tx - 24.0 - left;
-        let sw = ((avail - 2.0 * 24.0) / 3.0).max(60.0);
+        let avail = kr.x - 32.0 - left;
+        // three sliders + the toggle + gaps; under ~130 per slider the toggle loses its words
+        let narrow = (avail - (40.0 + 10.0 + ww) - 2.0 * 20.0 - 41.0) / 3.0 < 130.0;
+        let toggle_w = if narrow { 40.0 } else { 40.0 + 10.0 + ww };
+        let sw = ((avail - toggle_w - 2.0 * 20.0 - 41.0) / 3.0).max(70.0);
         let vols = [("Mic", self.cfg.mic_volume, 1.5), ("Clips", self.cfg.clip_volume, 1.5), ("In your ears", self.cfg.monitor_volume, 1.0)];
+        let label_w = 34.0;
+        let mut x = left;
+        c.text(g, x, title_y, "TO OTHERS", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
         for (i, (label, v, top_v)) in vols.iter().enumerate() {
-            let x = left + i as f32 * (sw + 24.0);
-            c.text(g, x, top, label, 12.0, Weight::Normal, 0.0, 1, Align::Left, t.muted);
+            if i == 2 {
+                // the toggle closes the "to others" group, then a divider, then what you hear
+                let ty = mid - 11.0;
+                let hover = self.is_hover(&Hit::SendVoice);
+                self.toggle(c, x, ty, self.cfg.mic_passthrough, 1, hover);
+                if !narrow {
+                    c.text(g, x + 50.0, ty + 2.0, words, 13.0, Weight::Normal, 0.0, 1, Align::Left, if hover { t.text } else { t.muted.mix(t.text, 0.4) });
+                }
+                self.hit(Rect::new(x, ty - 6.0, toggle_w, 34.0), Hit::SendVoice);
+                x += toggle_w + 20.0;
+                c.fill_rect(Rect::new(x, y + 12.0, 1.0, self.layout.h - y - 24.0), t.border);
+                x += 21.0;
+                c.text(g, x, title_y, "YOU HEAR", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
+            }
+            let name = if narrow && i == 2 { "Ears" } else { label };
+            let lw = if i == 2 && !narrow { g.measure(name, 12.0, Weight::Normal) + 10.0 } else { label_w };
+            c.text(g, x, mid - 8.5, name, 12.0, Weight::Normal, 0.0, 1, Align::Left, t.muted);
             let pct = format!("{}%", (v * 100.0).round());
-            c.text(g, x, top, &pct, 12.0, Weight::Bold, sw, 1, Align::Right, t.text);
-            let sr = Rect::new(x, top + 22.0, sw, 18.0);
+            let pw = 38.0;
+            let sr = Rect::new(x + lw, mid - 9.0, (sw - lw - pw).max(40.0), 18.0);
+            c.text(g, sr.right() + 6.0, mid - 8.5, &pct, 12.0, Weight::Semi, pw - 6.0, 1, Align::Right, t.text);
             let frac = (*v / top_v).clamp(0.0, 1.0) as f32;
-            let track = Rect::new(sr.x, sr.cy() - 3.0, sr.w, 6.0);
-            c.fill_rrect(track, 3.0, t.surface.mix(t.border, 0.9));
-            c.fill_rrect(Rect::new(track.x, track.y, (track.w * frac).max(6.0), 6.0), 3.0, t.accent);
+            let track = Rect::new(sr.x, sr.cy() - 2.0, sr.w, 4.0);
+            c.fill_rrect(track, 2.0, t.border);
+            c.fill_rrect(Rect::new(track.x, track.y, (track.w * frac).max(4.0), 4.0), 2.0, t.accent);
             let hov = self.is_hover(&Hit::Slider(i as u8)) || self.slider_drag == Some(i as u8);
             let knob = self.anim.color(key("knob", i as u64), if hov { WHITE } else { t.text }, MOTION_HOVER);
-            c.fill_circle(track.x + 9.0 + (track.w - 18.0) * frac, sr.cy(), 9.0, knob);
-            self.hit(sr.inset(0.0, -6.0), Hit::Slider(i as u8));
+            let kx = track.x + 7.0 + (track.w - 14.0) * frac;
+            if hov {
+                c.fill_circle(kx, sr.cy(), 11.0, t.accent.alpha(0.18));
+            }
+            c.fill_circle(kx, sr.cy(), 7.0, knob);
+            self.hit(sr.inset(0.0, -8.0), Hit::Slider(i as u8));
             self.layout.sliders.push((i as u8, sr));
+            x += sw + 20.0;
         }
     }
 
@@ -832,13 +1062,13 @@ impl App {
         let r = Rect::new(x, y, w, h);
         self.layout.panel = r;
         let pushed = c.push_opacity(alpha);
-        c.shadow(r, 10.0, 1.0);
-        c.card(r, 10.0, t.elevated, t.edge);
+        c.shadow(r, 12.0, 1.0);
+        c.card(r, 12.0, t.elevated, t.edge);
         if open {
             self.hit(r, Hit::Panel);
         }
         let mut cy = y + 14.0;
-        c.text(g, x + pad, cy, "Audio", 14.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
+        c.text(g, x + pad, cy + 2.0, "AUDIO", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
         cy += 30.0;
         let sel_x = x + pad + label_w + 14.0;
         let sel_w = w - (sel_x - x) - restart_w - 2.0 * pad;
@@ -852,7 +1082,7 @@ impl App {
             let is_open = self.menus.first().map(|m| m.owner == MenuOwner::Select(slot)).unwrap_or(false);
             let hover = self.is_hover(&hit) && open;
             let fg = self.anim.color(key("self", slot as u64), if hover || is_open { t.card_hover } else { t.card }, if hover || is_open { MOTION_HOVER } else { MOTION_UNHOVER });
-            c.card(sr, 10.0, fg, if is_open { t.accent_edge } else { t.border });
+            c.card(sr, 8.0, fg, if is_open { t.accent } else if hover { t.border_strong } else { t.border });
             c.text(g, sr.x + 12.0, sr.cy() - 9.0, &value, 13.0, Weight::Normal, sr.w - 40.0, 1, Align::Left, t.text);
             icons::draw(c, g, if is_open { Icon::ChevronUp } else { Icon::ChevronDown }, sr.right() - 24.0, sr.cy() - 6.0, 12.0, if is_open { t.text } else { t.muted });
             if open {
@@ -892,14 +1122,14 @@ impl App {
         }
         c.fill_rect(Rect::new(x + pad, cy, w - 2.0 * pad, 1.0), t.elevated.mix(t.border, 0.8));
         cy += 12.0;
-        c.text(g, x + pad, cy, "Playback", 14.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
+        c.text(g, x + pad, cy + 2.0, "PLAYBACK", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
         cy += 26.0;
         let opts = [
             (true, "One sound at a time", "Starting a sound stops the others.", self.cfg.solo),
             (false, "Press a playing sound to stop it", "A second click or hotkey stops it, instead of starting it over.", self.cfg.toggle_stop),
         ];
         for (solo, title, about, on) in opts {
-            c.text(g, x + pad, cy, title, 13.0, Weight::Normal, 0.0, 1, Align::Left, t.text);
+            c.text(g, x + pad, cy, title, 13.0, Weight::Semi, 0.0, 1, Align::Left, t.text);
             c.text(g, x + pad, cy + 19.0, about, 12.0, Weight::Normal, w - 2.0 * pad - 60.0, 1, Align::Left, t.muted);
             let hit = Hit::Opt(solo);
             let hover = self.is_hover(&hit) && open;
@@ -968,7 +1198,7 @@ impl App {
         for (i, item) in m.items.iter().enumerate() {
             match item {
                 MenuItem::Header(text) => {
-                    c.text(g, r.x + 17.0, y + 7.0, text, 12.0, Weight::Bold, r.w - 34.0, 1, Align::Left, t.muted);
+                    c.text(g, r.x + 17.0, y + 8.0, text, 12.0, Weight::Semi, r.w - 34.0, 1, Align::Left, t.faint);
                     rows.push(Rect::new(r.x, y, r.w, 30.0));
                     y += 30.0;
                 }
@@ -1006,7 +1236,7 @@ impl App {
                     let lit = live && *enabled && !*checked && (self.is_hover(&hit) || child_row == Some(i) || m.hover == Some(i));
                     let col = self.anim.color(key("menurow", (level as u64) << 32 | i as u64 | (hash_str(text) << 40)), if lit { t.card_hover } else { t.elevated }, if lit { MOTION_HOVER } else { MOTION_UNHOVER });
                     if col != t.elevated {
-                        c.fill_rrect(row, 7.0, col);
+                        c.fill_rrect(row, 6.0, col);
                     }
                     let mut tx = row.x + 12.0;
                     if let Some(d) = dot {
@@ -1030,7 +1260,7 @@ impl App {
                     let lit = live && (self.is_hover(&hit) || child_row == Some(i) || m.hover == Some(i));
                     let col = self.anim.color(key("menurow", (level as u64) << 32 | i as u64 | (hash_str(text) << 40)), if lit { t.card_hover } else { t.elevated }, if lit { MOTION_HOVER } else { MOTION_UNHOVER });
                     if col != t.elevated {
-                        c.fill_rrect(row, 7.0, col);
+                        c.fill_rrect(row, 6.0, col);
                     }
                     c.text(g, row.x + 12.0, row.cy() - 9.0, text, 13.0, Weight::Normal, row.w - 40.0, 1, Align::Left, t.text);
                     icons::draw(c, g, Icon::ChevronRight, row.right() - 10.0 - 12.0, row.cy() - 6.0, 12.0, t.muted);
@@ -1051,14 +1281,14 @@ impl App {
     fn ghost_chip(&mut self, c: &mut Canvas, g: &mut Gfx, id: u32, x: f32, y: f32, alpha: f32) {
         let Some(clip) = self.clip(id).cloned() else { return };
         let t = self.theme();
-        let tw = g.measure(&clip.stem, 13.0, Weight::Bold).min(200.0);
+        let tw = g.measure(&clip.stem, 13.0, Weight::Semi).min(200.0);
         let r = Rect::new(x, y, 8.0 + 34.0 + 10.0 + tw + 14.0, 50.0);
         let pushed = c.push_opacity(alpha);
         c.shadow(r, 8.0, 1.0);
         c.card(r, 8.0, t.elevated, t.edge);
         let art = Rect::new(r.x + 8.0, r.y + 8.0, 34.0, 34.0);
         self.tile_art(c, g, &clip, art, false, false);
-        c.text(g, art.right() + 10.0, r.cy() - 9.0, &clip.stem, 13.0, Weight::Bold, 200.0, 1, Align::Left, t.text);
+        c.text(g, art.right() + 10.0, r.cy() - 9.0, &clip.stem, 13.0, Weight::Semi, 200.0, 1, Align::Left, t.text);
         c.pop_opacity(pushed);
     }
 
@@ -1105,7 +1335,8 @@ impl App {
                 self.anim.keep_alive();
             }
             let tw = g.layout(&text, 13.0, Weight::Normal, 560.0, 4, Align::Left).map(|l| (l.width, l.height)).unwrap_or((100.0, 18.0));
-            let r = Rect::new((self.layout.w - (tw.0 + 50.0)) / 2.0, self.layout.footer_y - 14.0 - (tw.1 + 20.0) + dy, tw.0 + 50.0, tw.1 + 20.0);
+            let cx = (self.layout.content_x + self.layout.w) / 2.0;
+            let r = Rect::new(cx - (tw.0 + 50.0) / 2.0, self.layout.footer_y - 14.0 - (tw.1 + 20.0) + dy, tw.0 + 50.0, tw.1 + 20.0);
             let pushed = c.push_opacity(alpha);
             c.shadow(r, 8.0, 1.0);
             c.card(r, 8.0, th.elevated, th.edge);
@@ -1124,7 +1355,7 @@ impl App {
         let t = self.theme();
         let focused = d.focus == i && d.closing.is_none();
         let border = if focused { t.accent } else { t.border };
-        c.card(r, 10.0, t.card, border);
+        c.card(r, 8.0, t.card, border);
         let caret = self.caret_visible();
         d.fields[i].draw(c, g, Rect::new(r.x + 12.0, r.y + 1.0, r.w - 24.0, r.h - 2.0), focused, caret, t.text, t.muted, t.accent.mix(t.card, 0.55));
         self.layout.field_rects.push(r);
@@ -1185,7 +1416,7 @@ impl App {
         match &d.kind {
             DialogKind::Confirm { title, text, ok, .. } => {
                 let (title, text, ok) = (title.clone(), text.clone(), ok.clone());
-                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Bold, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
+                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Semi, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
                 c.text(g, x + DLG_PAD, y + 56.0, &text, 13.0, Weight::Normal, dw - 2.0 * DLG_PAD, 4, Align::Left, t.muted);
                 let n = self.hits.len();
                 self.dialog_buttons(c, g, r, &ok, Kind::Danger);
@@ -1193,7 +1424,7 @@ impl App {
             }
             DialogKind::Text { title, ok, .. } => {
                 let (title, ok) = (title.clone(), ok.clone());
-                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Bold, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
+                c.text(g, x + DLG_PAD, y + 22.0, &title, 18.0, Weight::Semi, dw - 2.0 * DLG_PAD, 1, Align::Left, t.text);
                 self.field(c, g, d, 0, Rect::new(x + DLG_PAD, y + 60.0, dw - 2.0 * DLG_PAD, 38.0));
                 if let Some((msg, col)) = &d.message {
                     let (msg, col) = (msg.clone(), *col);
@@ -1206,7 +1437,7 @@ impl App {
             DialogKind::Hotkey { what, .. } => {
                 let what = what.clone();
                 c.text(g, x + DLG_PAD, y + 24.0, &what, 13.0, Weight::Normal, dw - 2.0 * DLG_PAD, 1, Align::Center, t.muted);
-                c.text(g, x, y + 48.0, "Press a key", 22.0, Weight::Bold, dw, 1, Align::Center, t.text);
+                c.text(g, x, y + 48.0, "Press a key", 22.0, Weight::Semi, dw, 1, Align::Center, t.text);
                 c.text(g, x, y + 84.0, "Ctrl / Shift / Alt combos work  ·  Esc to cancel", 12.0, Weight::Normal, dw, 1, Align::Center, t.muted);
                 let n = self.hits.len();
                 let cw = self.button_width(g, "Cancel", false, Kind::Ghost).max(88.0);
@@ -1215,11 +1446,11 @@ impl App {
             }
             DialogKind::Import { normalize, group, new_group, busy, started } => {
                 let (normalize, group, new_group, busy, started) = (*normalize, group.clone(), *new_group, *busy, *started);
-                c.text(g, x + 24.0, y + 22.0, "Import a sound", 18.0, Weight::Bold, 0.0, 1, Align::Left, t.text);
+                c.text(g, x + 24.0, y + 22.0, "Import a sound", 18.0, Weight::Semi, 0.0, 1, Align::Left, t.text);
                 c.text(g, x + 24.0, y + 50.0, "From an Instagram reel or a YouTube video. Only the link is needed.", 12.0, Weight::Normal, dw - 48.0, 1, Align::Left, t.muted);
                 let mut cy = y + 84.0;
                 let cap = |c: &mut Canvas, g: &mut Gfx, x: f32, y: f32, s: &str| {
-                    c.text(g, x, y, s, 11.0, Weight::Bold, 0.0, 1, Align::Left, t.muted);
+                    c.text(g, x, y, s, 12.0, Weight::Semi, 0.0, 1, Align::Left, t.muted);
                 };
                 cap(c, g, x + 26.0, cy, "Link");
                 self.field(c, g, d, 0, Rect::new(x + 24.0, cy + 20.0, dw - 48.0, 38.0));
@@ -1250,7 +1481,7 @@ impl App {
                         self.hit(cr, Hit::DialogGroup);
                     }
                 } else {
-                    c.card(gr, 10.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent_edge } else { t.border });
+                    c.card(gr, 8.0, if hov || is_open { t.card_hover } else { t.card }, if is_open { t.accent } else if hov { t.border_strong } else { t.border });
                     let label = if group.is_empty() { "No group" } else { group.as_str() };
                     let col = if group.is_empty() { t.muted } else { t.text };
                     match self.group_color(&group).filter(|_| !group.is_empty()) {

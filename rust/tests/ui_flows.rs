@@ -438,6 +438,27 @@ fn ui_flows() {
     check("and the toast says both", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("Added 1 to Memes") && t.text.contains("notes.txt")).unwrap_or(false)));
     let _ = std::fs::remove_dir_all(&outside);
 
+    // --- the group sidebar: rows switch the view, the fold button folds it (and is remembered)
+    app(h, |a, _| a.show_group(ALL));
+    frame(h);
+    let row = app(h, |a, _| a.layout.tabs.iter().find(|(k, _)| k == "Memes").map(|(_, r)| *r).unwrap());
+    check("groups are listed in the sidebar", row.x < app(h, |a, _| a.layout.content_x));
+    click(h, row.cx(), row.cy());
+    check("clicking a sidebar group opens it", app(h, |a, _| a.view_key() == "Memes"));
+    let wide = app(h, |a, _| a.layout.content_x);
+    let fold = app(h, |a, _| a.layout.button(&Hit::SidebarToggle).or_else(|| a.hits.iter().find(|(_, x)| *x == Hit::SidebarToggle).map(|(r, _)| *r)).unwrap());
+    click(h, fold.cx(), fold.cy());
+    check("the fold button folds the sidebar", app(h, |a, _| a.cfg.sidebar_collapsed && a.layout.content_x < wide));
+    check("folded is remembered", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("\"sidebar_collapsed\": true"));
+    let fold = app(h, |a, _| a.hits.iter().find(|(_, x)| *x == Hit::SidebarToggle).map(|(r, _)| *r).unwrap());
+    click(h, fold.cx(), fold.cy());
+    check("and unfolds again (the key is dropped)", app(h, |a, _| !a.cfg.sidebar_collapsed && a.layout.content_x == wide) && !std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("sidebar_collapsed"));
+    let (gx, gy) = app(h, |a, _| a.layout.tabs.iter().find(|(k, _)| k == "Memes").map(|(_, r)| (r.cx(), r.cy())).unwrap());
+    app(h, |a, _| a.right_click(gx, gy));
+    check("right-clicking a sidebar group opens its menu", app(h, |a, _| a.menus.len() == 1));
+    app(h, |a, _| a.close_menus());
+    frame(h);
+
     // --- the config keeps keys this version doesn't know
     check("unknown config keys survive", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("unknown_key"));
 

@@ -110,6 +110,8 @@ pub struct Config {
     pub theme: String,
     /// "WxH+X+Y" (width/height in DIPs, position in screen pixels, like customtkinter)
     pub geometry: Option<String>,
+    /// the group sidebar is folded to icons (only written while true)
+    pub sidebar_collapsed: bool,
     /// keys this version doesn't know, kept as they were
     extra: Map<String, Value>,
 }
@@ -134,6 +136,7 @@ impl Default for Config {
             cookies_from_browser: None,
             theme: crate::theme::DEFAULT_THEME.into(),
             geometry: None,
+            sidebar_collapsed: false,
             extra: Map::new(),
         }
     }
@@ -141,7 +144,7 @@ impl Default for Config {
 
 const KNOWN: &[&str] = &[
     "mic", "cable", "monitor", "mic_volume", "clip_volume", "monitor_volume", "mic_passthrough",
-    "hotkeys", "stop_hotkey", "group", "group_colors", "order", "solo", "toggle_stop",
+    "hotkeys", "stop_hotkey", "group", "group_colors", "order", "solo", "toggle_stop", "sidebar_collapsed",
     "cookies_from_browser", "theme", "geometry",
 ];
 
@@ -200,6 +203,7 @@ impl Config {
             cookies_from_browser: opt_str(o.get("cookies_from_browser")),
             theme: o.get("theme").and_then(Value::as_str).map(str::to_owned).unwrap_or(d.theme),
             geometry: opt_str(o.get("geometry")),
+            sidebar_collapsed: boolean(o.get("sidebar_collapsed"), d.sidebar_collapsed),
             extra,
         }
     }
@@ -227,6 +231,9 @@ impl Config {
         o.insert("cookies_from_browser".into(), s(&self.cookies_from_browser));
         o.insert("theme".into(), json!(self.theme));
         o.insert("geometry".into(), s(&self.geometry));
+        if self.sidebar_collapsed {
+            o.insert("sidebar_collapsed".into(), json!(true));
+        }
         Value::Object(o)
     }
 }
