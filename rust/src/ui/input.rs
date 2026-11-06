@@ -276,6 +276,16 @@ impl App {
         if !self.menus.is_empty() {
             self.close_menus();
         }
+        // over the sidebar: its group list scrolls
+        let (mx, my) = self.mouse;
+        if self.layout.sidebar.contains(mx, my) {
+            let s = (self.side_scroll - delta / 120.0 * 3.0 * 34.0).clamp(0.0, self.layout.side_max);
+            if s != self.side_scroll {
+                self.side_scroll = s;
+                self.invalidate();
+            }
+            return;
+        }
         let v = self.layout.view.clone();
         let cur = self.scroll_target.get(&v).copied().unwrap_or(0.0);
         let s = (cur - delta / 120.0 * 92.0 * 1.5).clamp(0.0, self.layout.scroll_max);
@@ -307,6 +317,11 @@ impl App {
                 }
             }
             Hit::TabChevron(k) => self.group_menu(&k, None),
+            Hit::SidebarToggle => {
+                self.cfg.sidebar_collapsed = !self.cfg.sidebar_collapsed;
+                self.save_config();
+                self.invalidate();
+            }
             Hit::NewGroup => self.ask_text("New group", "", "Create", "Group name, e.g. Memes", TextAction::NewGroup(None)),
             Hit::TileMore(id) => {
                 let (x, y) = self.mouse;
@@ -473,8 +488,9 @@ impl App {
     pub fn group_menu(&mut self, group: &str, at: Option<(f32, f32)>) {
         let (x, y) = match at {
             Some(p) => p,
+            // beside its sidebar row
             None => match self.layout.tabs.iter().find(|(k, _)| k == group) {
-                Some((_, r)) => (r.x, r.bottom() + 6.0),
+                Some((_, r)) => (r.right() + 6.0, r.y),
                 None => self.mouse,
             },
         };

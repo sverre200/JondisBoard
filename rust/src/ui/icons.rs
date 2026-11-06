@@ -15,6 +15,9 @@ pub enum Icon {
     ChevronDown,
     ChevronUp,
     ChevronRight,
+    ChevronLeft,
+    /// four squares: All sounds
+    Grid,
     Bolt,
     Link,
     X,
@@ -66,6 +69,13 @@ pub fn draw(c: &Canvas, g: &Gfx, icon: Icon, x: f32, y: f32, size: f32, color: i
         Icon::ChevronDown => line(&[(0.18, 0.36), (0.5, 0.66), (0.82, 0.36)]),
         Icon::ChevronUp => line(&[(0.18, 0.66), (0.5, 0.36), (0.82, 0.66)]),
         Icon::ChevronRight => line(&[(0.36, 0.18), (0.66, 0.5), (0.36, 0.82)]),
+        Icon::ChevronLeft => line(&[(0.64, 0.18), (0.34, 0.5), (0.64, 0.82)]),
+        Icon::Grid => {
+            for (a, b) in [(0.1, 0.1), (0.56, 0.1), (0.1, 0.56), (0.56, 0.56)] {
+                let (x0, y0) = p(a, b);
+                c.stroke_rrect(super::gfx::Rect::new(x0, y0, 0.34 * n, 0.34 * n), 0.08 * n, w, color);
+            }
+        }
         Icon::Bolt => {
             let pts = [p(0.6, 0.04), p(0.18, 0.57), p(0.46, 0.57), p(0.4, 0.96), p(0.82, 0.42), p(0.54, 0.42)];
             c.path(g, &pts, true, true, w, color);

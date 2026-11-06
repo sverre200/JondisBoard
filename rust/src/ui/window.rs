@@ -84,7 +84,8 @@ fn dwm_set<T>(hwnd: HWND, attr: DWMWINDOWATTRIBUTE, v: &T) {
 /// (Windows 11). Returns the new icons, which must stay alive while the window uses them.
 pub fn apply_theme_chrome(hwnd: HWND, t: &Theme) -> Vec<logo::Icon> {
     dwm_set(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &1i32);
-    dwm_set(hwnd, DWMWA_CAPTION_COLOR, &t.bg.colorref());
+    // the title bar is the header's colour: one strip, not two
+    dwm_set(hwnd, DWMWA_CAPTION_COLOR, &t.surface.colorref());
     dwm_set(hwnd, DWMWA_TEXT_COLOR, &t.text.colorref());
     dwm_set(hwnd, DWMWA_BORDER_COLOR, &t.border.colorref());
     // SAFETY: plain queries and WM_SETICON with icons we keep alive (returned to the caller).
