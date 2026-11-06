@@ -1,8 +1,7 @@
 //! Colour themes and the runtime theme manager.
 //!
-//! All themes share one cool, dark foundation (the surfaces, borders and text of JondisClip's
-//! family look) and differ only in their accent, so they read as accent variations of the same
-//! app. The UI never caches a colour: it asks the current [`Theme`] each time it paints, so
+//! The themes are JondisClip's: each tints its surfaces, borders and text towards its hue and
+//! sets its accent, so the two apps look like one family in every theme. The UI never caches a colour: it asks the current [`Theme`] each time it paints, so
 //! switching theme is just swapping this value and repainting once (no rebuild, nothing lost).
 
 /// An sRGB colour, 0xRRGGBB.
@@ -137,38 +136,50 @@ const fn base(
     }
 }
 
-/// The shared foundation: window, side/header/footer surfaces, cards, card hover, border, text,
-/// secondary text. `card_playing` is worked out per accent in `derive`.
-const N_BG: u32 = 0x0b1018;
-const N_SURFACE: u32 = 0x0d131d;
-const N_CARD: u32 = 0x151f2d;
-const N_CARD_HOVER: u32 = 0x1c293b;
-const N_BORDER: u32 = 0x223147;
-const N_TEXT: u32 = 0xf0f4fa;
-const N_MUTED: u32 = 0x91a4bd;
-
-const fn accent(name: &'static str, accent: u32, hover: u32, on_accent: u32) -> Theme {
-    base(name, N_BG, N_SURFACE, N_CARD, N_CARD_HOVER, 0, N_BORDER, N_TEXT, N_MUTED, accent, hover, on_accent)
+/// One theme from JondisClip's palettes (ui/src/tokens.css there): the background, card,
+/// raised and hover surfaces, both borders and the three text tones are all tinted towards the
+/// theme's hue, so each theme is a whole colour mood, not just an accent.
+#[allow(clippy::too_many_arguments)]
+const fn tinted(
+    name: &'static str,
+    bg: u32,
+    card: u32,
+    raised: u32,
+    hover: u32,
+    border: u32,
+    border_strong: u32,
+    text: u32,
+    muted: u32,
+    faint: u32,
+    accent: u32,
+    accent_hover: u32,
+    on_accent: u32,
+) -> Theme {
+    let mut t = base(name, bg, 0, card, hover, 0, border, text, muted, accent, accent_hover, on_accent);
+    t.elevated = Rgb(raised);
+    t.border_strong = Rgb(border_strong);
+    t.faint = Rgb(faint);
+    t
 }
 
 const BASES: [Theme; 6] = [
     // the default: JondisBoard's green (it matches the icon)
-    accent("Toxic Green", 0x45e33f, 0x5be656, 0x04120a),
-    accent("Midnight Purple", 0x7c5cff, 0x8c70ff, 0xffffff),
-    accent("Ocean Blue", 0x3b8cff, 0x539aff, 0xffffff),
-    accent("Sunset Orange", 0xff8a2b, 0xff9a45, 0x1a0d04),
-    accent("Crimson", 0xff3d5e, 0xff5873, 0xffffff),
-    accent("Graphite", 0xe6e6ea, 0xf4f4f7, 0x111113),
+    tinted("Toxic Green", 0x080d09, 0x142018, 0x1b2b20, 0x233328, 0x22362a, 0x3a4d41, 0xe6f5e9, 0x7f9a86, 0x5b7061, 0x45e33f, 0x5be656, 0x04120a),
+    tinted("Midnight Purple", 0x0f0f14, 0x1e1e29, 0x262634, 0x2e2e3c, 0x2b2b3a, 0x424250, 0xececf3, 0x8a8aa0, 0x656576, 0x7c5cff, 0x8c70ff, 0xffffff),
+    tinted("Ocean Blue", 0x0a0f17, 0x16202f, 0x1d2a3d, 0x253245, 0x22324a, 0x3a495f, 0xe6eef9, 0x7e91ab, 0x5b6a7f, 0x3b8cff, 0x539aff, 0xffffff),
+    tinted("Sunset Orange", 0x120c09, 0x241914, 0x30211a, 0x382922, 0x3a2a20, 0x514138, 0xf8ece4, 0xa8907f, 0x7b685c, 0xff8a2b, 0xff9a45, 0x1a0d04),
+    tinted("Crimson", 0x110a0c, 0x23161a, 0x2e1d23, 0x36252b, 0x3a232a, 0x513b41, 0xf7e8eb, 0xa8868d, 0x7b6166, 0xff3d5e, 0xff5873, 0xffffff),
+    tinted("Graphite", 0x0e0e0f, 0x1d1d20, 0x26262a, 0x2e2e32, 0x2c2c31, 0x434348, 0xededef, 0x8b8b93, 0x66666b, 0xe6e6ea, 0xf4f4f7, 0x111113),
 ];
 
 pub const DEFAULT_THEME: &str = "Toxic Green";
 
 fn derive(mut t: Theme) -> Theme {
-    t.faint = Rgb(0x627994);
-    t.border_strong = Rgb(0x2f4260);
+    // header, sidebar and footer: a breath lighter than the background (JondisClip's chrome)
+    t.surface = t.bg.mix(t.card, 0.2);
     t.card_playing = t.card.mix(t.accent, 0.1);
-    t.elevated = Rgb(0x162131);
-    t.edge = Rgb(0x2b3c55);
+    // menus, popovers and toasts sit on the raised surface with the strong border
+    t.edge = t.border_strong;
     t.accent_soft = t.card.mix(t.accent, 0.16);
     t.accent_soft_hover = t.card.mix(t.accent, 0.26);
     t.accent_edge = t.border.mix(t.accent, 0.6);
@@ -248,8 +259,12 @@ mod tests {
         assert_eq!(by_name("Crimson").accent, Rgb(0xff3d5e));
         for t in &all {
             assert_ne!(t.elevated, Rgb(0));
-            // one foundation: only the accent differs
-            assert_eq!((t.bg, t.card, t.text, t.muted), (all[0].bg, all[0].card, all[0].text, all[0].muted));
+            assert_ne!(t.faint, Rgb(0));
+            assert_ne!(t.border_strong, Rgb(0));
+            // a whole tinted mood per theme, not just an accent
+            if t.name != all[0].name {
+                assert_ne!(t.bg, all[0].bg);
+            }
         }
     }
 
