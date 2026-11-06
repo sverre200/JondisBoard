@@ -863,7 +863,16 @@ impl App {
             (None, None) => "…".to_string(),
         };
         let meta_color = if clip.failed.is_some() { DANGER.mix(t.muted, 0.25) } else { t.muted };
-        let (mw, _) = c.text(g, tx, my, &meta, 12.0, Weight::Normal, 0.0, 1, Align::Left, meta_color);
+        // looping: a small accent loop mark before the duration
+        let looped = playing.is_some() && self.looping.contains(&id);
+        let lx = if looped {
+            icons::draw(c, g, Icon::Refresh, tx, my + 2.5, 12.0, t.accent);
+            17.0
+        } else {
+            0.0
+        };
+        let (mw, _) = c.text(g, tx + lx, my, &meta, 12.0, Weight::Normal, 0.0, 1, Align::Left, meta_color);
+        let mw = mw + lx;
         let chip = self.hotkey_of(id).map(|b| b.pretty());
         let chip_w = chip.as_ref().map(|s| g.measure(s, 11.0, Weight::Semi) + 12.0).unwrap_or(0.0);
         if view == ALL && !clip.group.is_empty() {

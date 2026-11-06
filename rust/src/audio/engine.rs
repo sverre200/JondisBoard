@@ -12,7 +12,7 @@
 use super::decode;
 use super::mixer::{self, AtomicF32, ClipAudio, Cmd, MicInput, MicReader, MicRing, OutputControl, PlayState, SR};
 use super::wasapi::{self, DeviceInfo, Kind, Stream};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -105,6 +105,8 @@ pub struct Player {
     pub levels: Levels,
     pub solo: AtomicBool,
     pub toggle_stop: AtomicBool,
+    /// clips set to loop (double-click); pressing one of them again stops it
+    looping: Mutex<HashSet<u32>>,
     streams: Mutex<Streams>,
     cache: Mutex<Cache>,
     loader_wake: Condvar,
@@ -123,6 +125,7 @@ impl Player {
             levels: Levels::new(),
             solo: AtomicBool::new(false),
             toggle_stop: AtomicBool::new(false),
+            looping: Mutex::new(HashSet::new()),
             streams: Mutex::new(Streams::default()),
             cache: Mutex::new(Cache::default()),
             loader_wake: Condvar::new(),
@@ -227,8 +230,12 @@ impl Player {
         self.state().snapshot(out)
     }
 
-    /// A click or a hotkey: the playback rules, then play.
+    /// A click or a hotkey: the playback rules, then play. A looping clip stops instead.
     pub fn press(&self, id: u32) {
+        if self.looping.lock().unwrap().remove(&id) && self.is_playing(id) {
+            self.stop(id);
+            return;
+        }
         if self.toggle_stop.load(Ordering::Relaxed) && self.is_playing(id) {
             self.stop(id);
             return;
@@ -279,7 +286,40 @@ impl Player {
         }
     }
 
+    /// Loop a clip (starting it if it isn't playing), or let it end at the end of this pass.
+    pub fn set_loop(&self, id: u32, on: bool) {
+        if on {
+            if !self.is_playing(id) {
+                if self.solo.load(Ordering::Relaxed) {
+                    self.stop_all_quiet();
+                }
+                self.play(id);
+            }
+            self.looping.lock().unwrap().insert(id);
+        } else {
+            self.looping.lock().unwrap().remove(&id);
+        }
+        let mut g = self.streams.lock().unwrap();
+        let s = &mut *g;
+        for o in [s.cable.as_mut(), s.monitor.as_mut()].into_iter().flatten() {
+            o.control.send(Cmd::Loop(id, on));
+        }
+    }
+
+    /// Whether `id` was set to loop (and hasn't been stopped since).
+    pub fn is_looping(&self, id: u32) -> bool {
+        self.looping.lock().unwrap().contains(&id)
+    }
+
+    /// The clips set to loop, for the UI (it shows the mark only on ones that play; a stale
+    /// entry is dropped by the next press of that clip).
+    pub fn looping_ids(&self, out: &mut Vec<u32>) {
+        out.clear();
+        out.extend(self.looping.lock().unwrap().iter().copied());
+    }
+
     pub fn stop(&self, id: u32) {
+        self.looping.lock().unwrap().remove(&id);
         self.cache.lock().unwrap().play_when_ready.remove(&id);
         let mut g = self.streams.lock().unwrap();
         let s = &mut *g;
@@ -289,6 +329,7 @@ impl Player {
     }
 
     fn stop_all_quiet(&self) {
+        self.looping.lock().unwrap().clear();
         self.cache.lock().unwrap().play_when_ready.clear();
         let mut g = self.streams.lock().unwrap();
         let s = &mut *g;

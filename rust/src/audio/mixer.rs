@@ -294,11 +294,14 @@ pub enum Cmd {
     Play(Arc<ClipAudio>),
     Stop(u32),
     StopAll,
+    /// a playing clip starts over by itself at its end (or stops doing so)
+    Loop(u32, bool),
 }
 
 struct Voice {
     clip: Arc<ClipAudio>,
     pos: usize,
+    looped: bool,
 }
 
 /// What a mixer publishes for the UI: which clips play and how far along they are.
@@ -431,7 +434,7 @@ impl OutputMixer {
                         let old = self.voices.remove(0);
                         self.discard(old.clip);
                     }
-                    self.voices.push(Voice { clip, pos: 0 });
+                    self.voices.push(Voice { clip, pos: 0, looped: false });
                 }
                 Cmd::Stop(id) => {
                     while let Some(i) = self.voices.iter().position(|v| v.clip.id == id) {
@@ -442,6 +445,11 @@ impl OutputMixer {
                 Cmd::StopAll => {
                     while let Some(v) = self.voices.pop() {
                         self.discard(v.clip);
+                    }
+                }
+                Cmd::Loop(id, on) => {
+                    for v in self.voices.iter_mut().filter(|v| v.clip.id == id) {
+                        v.looped = on;
                     }
                 }
             }
@@ -482,23 +490,32 @@ impl OutputMixer {
         out.fill(0.0);
         let mut ended = false;
         for v in self.voices.iter_mut() {
-            let n = frames.min(v.clip.frames().saturating_sub(v.pos));
-            match &v.clip.samples {
-                Samples::F32(d) => {
-                    let src = &d[v.pos * 2..(v.pos + n) * 2];
-                    for (o, s) in out[..n * 2].iter_mut().zip(src) {
-                        *o += *s;
+            let total = v.clip.frames();
+            // a looping clip wraps to its start inside the block (no gap); others end here
+            let mut done = 0;
+            loop {
+                let n = (frames - done).min(total.saturating_sub(v.pos));
+                let dst = &mut out[done * 2..(done + n) * 2];
+                match &v.clip.samples {
+                    Samples::F32(d) => {
+                        for (o, s) in dst.iter_mut().zip(&d[v.pos * 2..(v.pos + n) * 2]) {
+                            *o += *s;
+                        }
+                    }
+                    Samples::I16(d) => {
+                        for (o, s) in dst.iter_mut().zip(&d[v.pos * 2..(v.pos + n) * 2]) {
+                            *o += *s as f32 / 32768.0;
+                        }
                     }
                 }
-                Samples::I16(d) => {
-                    let src = &d[v.pos * 2..(v.pos + n) * 2];
-                    for (o, s) in out[..n * 2].iter_mut().zip(src) {
-                        *o += *s as f32 / 32768.0;
-                    }
+                v.pos += n;
+                done += n;
+                if done >= frames || !v.looped || total == 0 {
+                    break;
                 }
+                v.pos = 0;
             }
-            v.pos += frames;
-            ended |= v.pos >= v.clip.frames();
+            ended |= v.pos >= total;
         }
         if ended {
             let mut i = 0;
@@ -592,6 +609,33 @@ mod tests {
             g.process(&mut quiet);
         }
         assert_eq!(g.gain, 1.0);
+    }
+
+    #[test]
+    fn a_looped_clip_starts_over_without_a_gap_and_stops_on_request() {
+        let (mut m, mut c) = output(Arc::new(AtomicF32::new(1.0)), None);
+        // 300 frames of a ramp, blocks of 128: the loop point falls inside a block
+        let ramp: Vec<f32> = (0..300).flat_map(|i| [i as f32 / 1000.0, i as f32 / 1000.0]).collect();
+        c.send(Cmd::Play(clip(7, ramp.clone())));
+        c.send(Cmd::Loop(7, true));
+        let mut got = Vec::new();
+        let mut out = vec![0.0f32; 256];
+        for _ in 0..8 {
+            m.render(&mut out);
+            got.extend(out.iter().step_by(2).copied());
+        }
+        // 1024 frames (after the guard's 1 ms = 48 frame delay): the ramp three times over and
+        // a bit, sample for sample
+        for (i, s) in got.iter().enumerate().skip(48) {
+            assert_eq!(*s, ((i - 48) % 300) as f32 / 1000.0, "frame {i}");
+        }
+        assert!(c.state.is_playing(7));
+        // looping off: it ends at the end of the current pass
+        c.send(Cmd::Loop(7, false));
+        for _ in 0..4 {
+            m.render(&mut out);
+        }
+        assert!(!c.state.is_playing(7));
     }
 
     #[test]
