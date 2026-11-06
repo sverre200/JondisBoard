@@ -126,6 +126,7 @@ impl App {
         let h = self.hit_at(x, y);
         self.down_pos = (x, y);
         self.down_menus_open = !self.menus.is_empty();
+        self.down_double = double;
         // modal dialog: only its own parts react
         if self.dialog.is_some() {
             match &h {
@@ -244,9 +245,14 @@ impl App {
             return;
         }
         if let Hit::Tile(id) = h {
-            // plays on release; a click that closed a menu doesn't play
+            // plays on release; a click that closed a menu doesn't play; the second click of a
+            // double-click loops it (the first one already started it)
             if !self.down_menus_open {
-                self.press(id);
+                if self.down_double {
+                    self.set_loop(id, true);
+                } else {
+                    self.press(id);
+                }
             }
             return;
         }
@@ -439,6 +445,8 @@ impl App {
         let Some(c) = self.clip(id).cloned() else { return };
         let mut items = vec![MenuItem::Header(c.stem.clone())];
         items.push(MenuItem::Item { text: "Play".into(), action: Action::Play(id), danger: false, dot: None, enabled: true, checked: false, instant: true });
+        let looping = self.looping.contains(&id) && self.playing.contains_key(&id);
+        items.push(if looping { MenuItem::item("Stop looping", Action::Loop(id, false)) } else { MenuItem::item("Loop  (double-click)", Action::Loop(id, true)) });
         match self.hotkey_of(id).map(|b| b.pretty()) {
             Some(k) => {
                 items.push(MenuItem::item(format!("Change hotkey  ({k})..."), Action::SetHotkey(id)));

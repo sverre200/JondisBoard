@@ -119,6 +119,8 @@ pub struct Job {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Play(u32),
+    /// loop it (true) or let it end (false)
+    Loop(u32, bool),
     SetHotkey(u32),
     ClearHotkey(u32),
     MoveTo(u32, String),
@@ -312,6 +314,8 @@ pub struct App {
     audio_retry: bool,
     pub progress: Vec<(u32, f32)>,
     pub playing: HashMap<u32, f32>,
+    /// clips set to loop (shown on the tiles that are playing)
+    pub looping: std::collections::HashSet<u32>,
     pub flash: HashMap<u32, (Instant, f32)>,
     pub slide_until: Instant,
     pub caret_since: Instant,
@@ -326,6 +330,8 @@ pub struct App {
     pub down: Option<super::view::Hit>,
     pub down_pos: (f32, f32),
     pub down_menus_open: bool,
+    /// the press was the second click of a double-click
+    pub down_double: bool,
     pub slider_drag: Option<u8>,
     pub scrollbar_drag: Option<(f32, f32)>,
     pub hits: Vec<(Rect, super::view::Hit)>,
@@ -421,6 +427,7 @@ impl App {
             audio_retry: false,
             progress: Vec::new(),
             playing: HashMap::new(),
+            looping: std::collections::HashSet::new(),
             flash: HashMap::new(),
             slide_until: now,
             caret_since: now,
@@ -433,6 +440,7 @@ impl App {
             down: None,
             down_pos: (0.0, 0.0),
             down_menus_open: false,
+            down_double: false,
             slider_drag: None,
             scrollbar_drag: None,
             hits: Vec::new(),
@@ -688,6 +696,26 @@ impl App {
         self.player.press(id);
     }
 
+    /// Loop a sound (double-click, or its menu), or let it end at the end of this pass.
+    pub fn set_loop(&mut self, id: u32, on: bool) {
+        if let Some(c) = self.clip(id) {
+            if let Some(e) = &c.failed {
+                let msg = format!("Couldn't load {}: {e}", c.stem);
+                return self.toast(&msg, Level::Warn);
+            }
+        }
+        self.player.set_loop(id, on);
+        if on {
+            self.looping.insert(id);
+            let stem = self.clip(id).map(|c| c.stem.clone()).unwrap_or_default();
+            self.toast(&format!("Looping '{stem}'. Click it again (or its hotkey) to stop."), Level::Info);
+        } else {
+            self.looping.remove(&id);
+        }
+        super::window::set_timer(self.hwnd, super::window::TIMER_PLAYING, 33);
+        self.invalidate();
+    }
+
     pub fn flash_tile(&mut self, id: u32, strength: f32) {
         self.flash.insert(id, (Instant::now(), strength));
         self.invalidate();
@@ -702,8 +730,12 @@ impl App {
         let mut buf = std::mem::take(&mut self.progress);
         self.player.progress(&mut buf);
         let now: HashMap<u32, f32> = buf.iter().copied().collect();
-        let changed = now != self.playing;
+        let mut ids = Vec::new();
+        self.player.looping_ids(&mut ids);
+        let looping: std::collections::HashSet<u32> = ids.into_iter().collect();
+        let changed = now != self.playing || looping != self.looping;
         self.playing = now;
+        self.looping = looping;
         self.progress = buf;
         self.player.collect_garbage();
         if changed || !self.playing.is_empty() {
@@ -1605,6 +1637,7 @@ impl App {
     pub fn run(&mut self, a: Action) {
         match a {
             Action::Play(id) => self.press(id),
+            Action::Loop(id, on) => self.set_loop(id, on),
             Action::SetHotkey(id) => self.record_hotkey(HotkeyTarget::Clip(id)),
             Action::ClearHotkey(id) => self.assign_hotkey(HotkeyTarget::Clip(id), None),
             Action::MoveTo(id, g) => self.move_clip(id, &g, false),

@@ -438,6 +438,37 @@ fn ui_flows() {
     check("and the toast says both", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("Added 1 to Memes") && t.text.contains("notes.txt")).unwrap_or(false)));
     let _ = std::fs::remove_dir_all(&outside);
 
+    // --- double-click loops a sound; the next click (or hotkey) stops the loop
+    app(h, |a, _| a.show_group(ALL));
+    frame(h);
+    let lp = app(h, |a, _| a.visible()[1]);
+    let (lx, ly) = app(h, |a, _| tile_center(a, lp));
+    app(h, |a, g| {
+        a.played.clear();
+        a.mouse_move(g, lx, ly);
+        a.mouse_down(g, lx, ly, false, false);
+        a.mouse_up(lx, ly);
+        a.mouse_down(g, lx, ly, false, true); // the second click of a double-click
+        a.mouse_up(lx, ly);
+    });
+    window::pump(80);
+    check("a double-click sets the sound looping", app(h, |a, _| a.player.is_looping(lp) && a.looping.contains(&lp)));
+    check("and it plays", app(h, |a, _| a.played.contains(&lp)));
+    check("the toast says how to stop it", app(h, |a, _| a.toast.as_ref().map(|t| t.text.starts_with("Looping")).unwrap_or(false)));
+    app(h, |a, g| {
+        a.mouse_down(g, lx, ly, false, false);
+        a.mouse_up(lx, ly);
+    });
+    check("the next click stops the loop", app(h, |a, _| !a.player.is_looping(lp)));
+    app(h, |a, _| a.right_click(lx, ly));
+    check("the menu offers Loop", app(h, |a, _| a.menus.first().map(|m| m.items.iter().any(|it| matches!(it, MenuItem::Item { text, .. } if text.starts_with("Loop")))).unwrap_or(false)));
+    app(h, |a, _| a.close_menus());
+    app(h, |a, _| a.run(Action::Loop(lp, true)));
+    check("Loop from the menu loops it", app(h, |a, _| a.player.is_looping(lp)));
+    app(h, |a, _| a.stop_all());
+    check("Stop all ends every loop", app(h, |a, _| !a.player.is_looping(lp)));
+    frame(h);
+
     // --- the group sidebar: rows switch the view, the fold button folds it (and is remembered)
     app(h, |a, _| a.show_group(ALL));
     frame(h);

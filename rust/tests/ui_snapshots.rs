@@ -128,7 +128,11 @@ fn snapshots() {
     });
     window::pump(60);
     let p = dir.join("02_playing_flash.png");
-    app(h, |a, _| a.playing.insert(bruh, 0.42));
+    app(h, |a, _| {
+        a.playing.insert(bruh, 0.42);
+        a.player.set_loop(bruh, true);
+        a.looping.insert(bruh);
+    });
     window::snapshot(h, &p).unwrap();
     app(h, |a, _| a.playing.clear());
 
