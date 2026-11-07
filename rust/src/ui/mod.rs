@@ -8,6 +8,7 @@ pub mod images;
 pub mod input;
 pub mod logo;
 pub mod shell;
+pub mod taskbar;
 pub mod textfield;
 pub mod view;
 pub mod window;

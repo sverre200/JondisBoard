@@ -1262,6 +1262,7 @@ impl App {
         self.cfg.theme = self.themes.get().name.to_string();
         self.save_config();
         self.icons = super::window::apply_theme_chrome(self.hwnd, self.themes.get());
+        super::taskbar::follow_theme(self.hwnd, self.themes.get());
         self.invalidate();
         self.timings.push(("theme chrome", t0.elapsed().as_secs_f64() * 1000.0));
     }

@@ -13,7 +13,7 @@ use std::time::Instant;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 
-const APP_ID: &str = "JondisBoard.Soundboard";
+use ui::taskbar::APP_ID;
 
 fn main() {
     let started = Instant::now();
