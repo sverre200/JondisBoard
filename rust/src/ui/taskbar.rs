@@ -198,11 +198,9 @@ pub fn follow_theme(hwnd: HWND, t: &Theme) {
             crate::log::warn("couldn't write the taskbar icon");
             return;
         }
-        if let Some(dir) = pins_dir() {
-            let n = update_pins(&dir, &exe, &ico);
-            if n > 0 {
-                crate::log::info(&format!("taskbar pin now uses the {} icon", t.name));
-            }
+        let n: usize = pin_dirs().iter().map(|d| update_pins(d, &exe, &ico)).sum();
+        if n > 0 {
+            crate::log::info(&format!("taskbar pin now uses the {} icon", t.name));
         }
     });
     // the window's own properties belong to the UI thread
@@ -211,10 +209,22 @@ pub fn follow_theme(hwnd: HWND, t: &Theme) {
     }
 }
 
-/// The taskbar pins folder of this user.
-pub fn pins_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(base).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"))
+/// Where this user's taskbar pins live: `User Pinned\TaskBar`, and the folders under
+/// `User Pinned\ImplicitAppShortcuts\<hash>`, which is where Windows puts the pin of a window with
+/// its own AppUserModelID and relaunch properties (that is, ours).
+pub fn pin_dirs() -> Vec<PathBuf> {
+    match std::env::var_os("APPDATA") {
+        Some(base) => pin_dirs_in(&PathBuf::from(base).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned")),
+        None => Vec::new(),
+    }
+}
+
+pub fn pin_dirs_in(user_pinned: &Path) -> Vec<PathBuf> {
+    let mut out = vec![user_pinned.join("TaskBar")];
+    if let Ok(rd) = std::fs::read_dir(user_pinned.join("ImplicitAppShortcuts")) {
+        out.extend(rd.flatten().filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false)).map(|e| e.path()));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -294,5 +304,19 @@ mod tests {
         // already pointing there: nothing to do
         assert_eq!(update_pins(&dir, &exe, &ico), 0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pins_are_looked_for_in_taskbar_and_implicit_app_shortcuts() {
+        let root = std::env::temp_dir().join(format!("jb_userpinned_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("TaskBar")).unwrap();
+        std::fs::create_dir_all(root.join("ImplicitAppShortcuts").join("3f5545f95d688c2e")).unwrap();
+        std::fs::create_dir_all(root.join("ImplicitAppShortcuts").join("aa11")).unwrap();
+        let dirs = pin_dirs_in(&root);
+        assert_eq!(dirs.len(), 3);
+        assert!(dirs.contains(&root.join("TaskBar")));
+        assert!(dirs.contains(&root.join("ImplicitAppShortcuts").join("3f5545f95d688c2e")));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
