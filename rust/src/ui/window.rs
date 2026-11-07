@@ -324,6 +324,7 @@ pub fn create(paths: Paths, started: Instant, bench: Option<super::bench::Bench>
         app.icons = apply_theme_chrome(hwnd, app.themes.get());
         // sound files dropped from Explorer are added like Add files
         DragAcceptFiles(hwnd, true);
+        super::taskbar::follow_theme(hwnd, app.themes.get());
         app.mark("window created");
         {
             let mut st = win.state.borrow_mut();
