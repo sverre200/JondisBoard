@@ -118,6 +118,33 @@ pub struct Player {
     pub decode_ns: AtomicU64,
 }
 
+/// Whether a saved device name means this device. Windows renames an endpoint when it's
+/// reconnected or re-paired by adding a counter: "Headphones (Arctis GameBuds)" becomes
+/// "Headphones (2- Arctis GameBuds)", so that counter is ignored.
+pub fn same_device(saved: &str, actual: &str) -> bool {
+    saved == actual || device_key(saved) == device_key(actual)
+}
+
+fn device_key(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(i) = rest.find('(') {
+        out.push_str(&rest[..=i]);
+        rest = &rest[i + 1..];
+        let digits = rest.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits > 0 && rest[digits..].starts_with("- ") {
+            rest = &rest[digits + 2..];
+        }
+    }
+    out.push_str(rest);
+    out.to_lowercase()
+}
+
+/// The device a saved name means: the exact name first, else the same device renamed.
+pub fn find_device<'a>(list: &'a [DeviceInfo], saved: &str) -> Option<&'a DeviceInfo> {
+    list.iter().find(|d| d.name == saved).or_else(|| list.iter().find(|d| same_device(saved, &d.name)))
+}
+
 impl Player {
     /// budget: bytes of decoded audio to keep in memory.
     pub fn new(ffmpeg: Option<PathBuf>, budget: usize, notify: Notify) -> Arc<Player> {
@@ -403,12 +430,22 @@ impl Player {
         let mut warnings = Vec::new();
         let outs = wasapi::list(Kind::Output);
         let ins = wasapi::list(Kind::Input);
-        let find = |list: &[DeviceInfo], name: Option<&str>| name.and_then(|n| list.iter().find(|d| d.name == n).cloned());
+        let find = |list: &[DeviceInfo], name: Option<&str>| name.and_then(|n| find_device(list, n).cloned());
         let cable_dev = find(&outs, cable);
         let mut monitor_dev = find(&outs, monitor);
         let mut mic_dev = find(&ins, mic);
         if cable_dev.is_none() {
             warnings.push("No virtual cable selected - clips won't reach Discord/games.".to_string());
+        }
+        // a saved device that isn't there (unplugged, or renamed beyond recognition) is said out
+        // loud: silence with no reason is the worst outcome
+        if let (Some(n), None) = (monitor, &monitor_dev) {
+            warnings.push(format!("Couldn't find '{n}' - you won't hear clips. Pick it again under Hear clips on."));
+        }
+        if let (Some(n), None) = (mic, &mic_dev) {
+            if !n.to_lowercase().contains("cable") {
+                warnings.push(format!("Couldn't find '{n}' - your voice isn't sent. Pick it again under Your microphone."));
+            }
         }
         if mic.map(|m| m.to_lowercase().contains("cable")).unwrap_or(false) {
             warnings.push("Mic is set to a CABLE device - that would loop audio, so mic is disabled.".to_string());
@@ -573,5 +610,27 @@ fn evict(c: &mut Cache, budget: usize, keep: u32) {
                 c.bytes -= a.samples.bytes();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_renamed_with_a_counter_is_still_the_same_device() {
+        assert!(same_device("Headphones (Arctis GameBuds)", "Headphones (2- Arctis GameBuds)"));
+        assert!(same_device("Headphones (2- Arctis GameBuds)", "Headphones (Arctis GameBuds)"));
+        assert!(same_device("Mic/Inst (Samson G-Track Pro)", "Mic/Inst (Samson G-Track Pro)"));
+        assert!(!same_device("Headphones (Arctis GameBuds)", "Headphones (Samson G-Track Pro)"));
+        assert!(!same_device("CABLE Input (VB-Audio Virtual Cable)", "CABLE In 16ch (VB-Audio Virtual Cable)"));
+        // numbers that aren't Windows' "N- " counter stay significant
+        assert!(!same_device("1 - Optix MAG24C (AMD High Definition Audio Device)", "3 - S24D390 (AMD High Definition Audio Device)"));
+        let list = vec![
+            DeviceInfo { id: "a".into(), name: "Headphones (Samson G-Track Pro)".into() },
+            DeviceInfo { id: "b".into(), name: "Headphones (2- Arctis GameBuds)".into() },
+        ];
+        assert_eq!(find_device(&list, "Headphones (Arctis GameBuds)").map(|d| d.id.as_str()), Some("b"));
+        assert!(find_device(&list, "Speakers (Realtek)").is_none());
     }
 }
