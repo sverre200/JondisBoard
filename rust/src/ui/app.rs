@@ -844,7 +844,7 @@ impl App {
                 let _com = wasapi::ComScope::mta();
                 let ins = wasapi::list(Kind::Input);
                 let outs = wasapi::list(Kind::Output);
-                let has = |list: &[wasapi::DeviceInfo], n: &Option<String>| n.as_ref().map(|n| list.iter().any(|d| &d.name == n)).unwrap_or(true);
+                let has = |list: &[wasapi::DeviceInfo], n: &Option<String>| n.as_ref().map(|n| crate::audio::engine::find_device(list, n).is_some()).unwrap_or(true);
                 let present = has(&ins, &want.0) && has(&outs, &want.1) && has(&outs, &want.2);
                 let _ = tx.send(Msg::AudioProbe(present));
                 w.wake();
