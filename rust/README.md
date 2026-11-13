@@ -80,7 +80,22 @@ Put the standalone `yt-dlp.exe` (from https://github.com/yt-dlp/yt-dlp/releases)
 powershell -ExecutionPolicy Bypass -File rust\release\make_release.ps1
 ```
 
-It writes `rust\dist\JondisBoard-<version>.zip`. ffmpeg comes from `rust\vendor\ffmpeg.exe` or PATH.
+It writes `rust\dist\JondisBoard-<version>-win64.zip`. ffmpeg comes from `rust\vendor\ffmpeg.exe` or PATH.
+
+## Releases and updates
+
+```bash
+powershell -ExecutionPolicy Bypass -File rust\release\release.ps1 2.1.0
+```
+
+sets the version, builds the ZIP, commits, tags, pushes and publishes GitHub release `v2.1.0`
+with `JondisBoard-2.1.0-win64.zip`. The app (`src\update.rs`) asks
+`api.github.com/repos/sverre200/JondisBoard/releases/latest` 20 s after start and every 6 hours
+(one anonymous GET; the `check_for_updates` setting turns it off; builds run from `target\` never
+check). A newer version shows an Update button; on a click it downloads the ZIP with Windows'
+`curl.exe`, unpacks it with `tar.exe`, renames the program files to `*.old`, copies the new ones
+in and restarts. Only top-level `.exe` and `.txt` files are replaced, never `sounds\` or
+`config.json`. The repository must be public for the anonymous check to see its releases.
 
 ## Command line
 

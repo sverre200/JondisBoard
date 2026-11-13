@@ -150,8 +150,12 @@ fn snapshots() {
     app(h, |a, _| a.close_menus());
 
     // settings
-    app(h, |a, _| a.open_settings(true));
+    app(h, |a, _| {
+        a.update = jondisboard::ui::app::UpdateState::Available(jondisboard::update::Release { version: "2.1.0".into(), zip_url: String::new(), size: None });
+        a.open_settings(true);
+    });
     snap(h, &dir, "04_settings");
+    app(h, |a, _| a.update = jondisboard::ui::app::UpdateState::Idle);
     app(h, |a, _| a.open_settings(false));
 
     // dialogs

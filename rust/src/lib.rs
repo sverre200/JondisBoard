@@ -12,3 +12,4 @@ pub mod log;
 pub mod paths;
 pub mod theme;
 pub mod ui;
+pub mod update;

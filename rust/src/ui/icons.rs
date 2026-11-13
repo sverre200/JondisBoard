@@ -16,6 +16,8 @@ pub enum Icon {
     ChevronUp,
     ChevronRight,
     ChevronLeft,
+    /// an arrow into a tray: Update
+    Download,
     /// four squares: All sounds
     Grid,
     Bolt,
@@ -70,6 +72,11 @@ pub fn draw(c: &Canvas, g: &Gfx, icon: Icon, x: f32, y: f32, size: f32, color: i
         Icon::ChevronUp => line(&[(0.18, 0.66), (0.5, 0.36), (0.82, 0.66)]),
         Icon::ChevronRight => line(&[(0.36, 0.18), (0.66, 0.5), (0.36, 0.82)]),
         Icon::ChevronLeft => line(&[(0.64, 0.18), (0.34, 0.5), (0.64, 0.82)]),
+        Icon::Download => {
+            line(&[(0.5, 0.08), (0.5, 0.62)]);
+            line(&[(0.26, 0.4), (0.5, 0.64), (0.74, 0.4)]);
+            line(&[(0.12, 0.72), (0.12, 0.9), (0.88, 0.9), (0.88, 0.72)]);
+        }
         Icon::Grid => {
             for (a, b) in [(0.1, 0.1), (0.56, 0.1), (0.1, 0.56), (0.56, 0.56)] {
                 let (x0, y0) = p(a, b);

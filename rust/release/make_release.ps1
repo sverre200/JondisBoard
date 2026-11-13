@@ -1,4 +1,4 @@
-# Builds the portable release: rust\dist\JondisBoard-<version>.zip containing
+# Builds the portable release: rust\dist\JondisBoard-<version>-win64.zip containing
 #   JondisBoard\JondisBoard.exe, ffmpeg.exe, yt-dlp.exe, READ ME FIRST.txt, sounds\ (empty)
 #
 #   powershell -ExecutionPolicy Bypass -File rust\release\make_release.ps1
@@ -41,7 +41,7 @@ try {
     $lic = Join-Path (Join-Path $rust "vendor") "ffmpeg-LICENSE.txt"
     if (Test-Path $lic) { Copy-Item $lic (Join-Path $stage "ffmpeg-LICENSE.txt") }
     $suffix = if ($WithoutYtDlp) { "-no-yt-dlp" } else { "" }
-    $zip = Join-Path $dist "JondisBoard-$version$suffix.zip"
+    $zip = Join-Path $dist "JondisBoard-$version$suffix-win64.zip"
     if (Test-Path $zip) { Remove-Item -Force $zip }
     Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal
     Get-Item $zip | Select-Object FullName, @{n = "MB"; e = { [math]::Round($_.Length / 1MB, 1) } }
