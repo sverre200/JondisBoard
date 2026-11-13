@@ -33,6 +33,13 @@ USING IT
 - In DayZ, hold push-to-talk (Caps Lock) while you press a sound's hotkey, or switch DayZ to voice activation.
 - In Discord, set Input Device to CABLE Output and turn Noise Suppression off.
 
+UPDATES
+
+- JondisBoard asks GitHub whether a newer version is out when it starts (nothing about you or
+  your sounds is sent). When there is one, an Update button appears at the top: click it and
+  the app downloads it and restarts. Your sounds and settings are kept.
+  Settings has a switch to turn the check off, and a Check now button.
+
 UNINSTALL
 
 - Close JondisBoard and delete its folder (your sounds and config.json are in it, so move them
