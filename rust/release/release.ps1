@@ -20,7 +20,9 @@ try {
     # the version lives in Cargo.toml (the app reads it at build time)
     $toml = Join-Path $rust "Cargo.toml"
     $text = [IO.File]::ReadAllText($toml)
-    $new = [regex]::Replace($text, '(?m)^version = "[^"]+"', "version = `"$Version`"", 1)
+    # the package's own version only: the first match (dependencies have version lines too)
+    $new = ([regex]'(?m)^version = "[^"]+"').Replace($text, "version = `"$Version`"", 1)
+    if (([regex]'(?m)^version = ').Matches($new).Count -ne ([regex]'(?m)^version = ').Matches($text).Count) { throw "Cargo.toml changed unexpectedly" }
     [IO.File]::WriteAllText($toml, $new, (New-Object Text.UTF8Encoding $false))
 
     & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "make_release.ps1")
