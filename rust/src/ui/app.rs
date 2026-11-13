@@ -16,6 +16,7 @@ use crate::importer;
 use crate::library::{self, Library};
 use crate::paths::Paths;
 use crate::theme::{self, Rgb, ThemeManager, DANGER, GOOD, WARN};
+use crate::update::{self, Release};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -54,6 +55,23 @@ pub enum Msg {
     AudioStarted(Result<Vec<String>, String>, Devices, [Option<String>; 3]),
     /// after a device was lost: whether every configured device is present again
     AudioProbe(bool),
+    /// GitHub's answer (and whether the user asked with Check now)
+    UpdateChecked(Result<Option<Release>, String>, bool),
+    /// the update is downloaded and unpacked here (or why not)
+    UpdateReady(Result<PathBuf, String>),
+}
+
+/// Where the app is with updates.
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpdateState {
+    /// not asked yet
+    Idle,
+    Checking,
+    UpToDate,
+    Available(Release),
+    Downloading(Release),
+    /// the last check or install failed (shown in Settings)
+    Failed(String),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -300,6 +318,7 @@ pub struct App {
     pub jobs: Vec<Job>,
     /// how far the sidebar's group list is scrolled
     pub side_scroll: f32,
+    pub update: UpdateState,
     /// the view the sidebar last scrolled into sight (it follows the open group)
     pub side_follow: Option<String>,
     next_job: u64,
@@ -417,6 +436,7 @@ impl App {
             landing: None,
             jobs: Vec::new(),
             side_scroll: 0.0,
+            update: UpdateState::Idle,
             side_follow: None,
             import_target: None,
             next_job: 1,
@@ -742,6 +762,115 @@ impl App {
             self.invalidate();
         }
         !self.playing.is_empty()
+    }
+
+    // ---------- updates ----------
+
+    /// Whether this copy may update itself: not a developer build in Cargo's target folder.
+    pub fn can_update(&self) -> bool {
+        !test_mode() && !update::is_dev_install(&self.paths.exe_dir)
+    }
+
+    /// Ask GitHub for a newer version, off the UI thread. `manual`: the Check now button (it
+    /// checks even with the setting off, and says so when there's nothing new).
+    pub fn check_updates(&mut self, manual: bool) {
+        if !self.can_update() || (!manual && !self.cfg.check_for_updates) {
+            return;
+        }
+        if matches!(self.update, UpdateState::Checking | UpdateState::Downloading(_)) {
+            return;
+        }
+        // a timed check doesn't hide an offer that's already showing
+        if manual || !matches!(self.update, UpdateState::Available(_)) {
+            self.update = UpdateState::Checking;
+        }
+        let (tx, w) = (self.tx.clone(), self.waker);
+        std::thread::Builder::new()
+            .name("update check".into())
+            .spawn(move || {
+                let _ = tx.send(Msg::UpdateChecked(update::check(update::VERSION), manual));
+                w.wake();
+            })
+            .ok();
+        self.invalidate();
+    }
+
+    pub fn update_checked(&mut self, r: Result<Option<Release>, String>, manual: bool) {
+        if matches!(self.update, UpdateState::Downloading(_)) {
+            return;
+        }
+        match r {
+            Ok(Some(rel)) => {
+                if self.update != UpdateState::Available(rel.clone()) {
+                    crate::log::info(&format!("update {} is available", rel.version));
+                    self.toast(&format!("JondisBoard {} is out. Click Update at the top to install it.", rel.version), Level::Info);
+                }
+                self.update = UpdateState::Available(rel);
+            }
+            Ok(None) => {
+                if !matches!(self.update, UpdateState::Available(_)) || manual {
+                    self.update = UpdateState::UpToDate;
+                }
+            }
+            Err(e) => {
+                // offline is normal: logged, and only shown if the user asked
+                crate::log::warn(&format!("update check failed: {e}"));
+                if manual {
+                    self.update = UpdateState::Failed("Couldn't reach GitHub. Check your internet and try again.".into());
+                } else if matches!(self.update, UpdateState::Checking) {
+                    self.update = UpdateState::Idle;
+                }
+            }
+        }
+        self.invalidate();
+    }
+
+    /// The Update button: download in the background (the board keeps working), then swap the
+    /// program files and restart.
+    pub fn install_update(&mut self) {
+        let UpdateState::Available(rel) = self.update.clone() else { return };
+        let Some(work) = update::work_dir() else { return };
+        if !self.can_update() {
+            return;
+        }
+        crate::log::info(&format!("downloading update {}", rel.version));
+        self.update = UpdateState::Downloading(rel.clone());
+        let (tx, w) = (self.tx.clone(), self.waker);
+        std::thread::Builder::new()
+            .name("update download".into())
+            .spawn(move || {
+                let _ = tx.send(Msg::UpdateReady(update::download(&rel, &work)));
+                w.wake();
+            })
+            .ok();
+        self.invalidate();
+    }
+
+    pub fn update_ready(&mut self, r: Result<PathBuf, String>) {
+        let UpdateState::Downloading(rel) = self.update.clone() else { return };
+        let fail = |app: &mut App, e: String| {
+            crate::log::error(&format!("update {} failed: {e}", rel.version));
+            app.update = UpdateState::Available(rel.clone());
+            app.toast("Couldn't install the update. Nothing was changed; try again later.", Level::Bad);
+        };
+        let staged = match r {
+            Ok(s) => s,
+            Err(e) => return fail(self, e),
+        };
+        if let Err(e) = update::apply(&staged, &self.paths.exe_dir) {
+            return fail(self, e);
+        }
+        // the new exe waits for this one to close (it's told our process id), then cleans up
+        let mut cmd = std::process::Command::new(self.paths.exe_dir.join("JondisBoard.exe"));
+        cmd.args(std::env::args_os().skip(1).filter(|a| a != "--updated")).arg("--updated").arg(std::process::id().to_string());
+        match cmd.spawn() {
+            Ok(_) => {
+                crate::log::info(&format!("update {} installed: restarting", rel.version));
+                self.player.stop_all();
+                super::window::post_close(self.hwnd);
+            }
+            Err(e) => fail(self, format!("couldn't start the new version: {e}")),
+        }
     }
 
     // ---------- toasts ----------
@@ -1769,6 +1898,8 @@ impl App {
                     self.invalidate();
                 }
                 Msg::AudioStarted(r, devs, chosen) => self.audio_started(r, devs, chosen),
+                Msg::UpdateChecked(r, manual) => self.update_checked(r, manual),
+                Msg::UpdateReady(r) => self.update_ready(r),
             }
         }
     }

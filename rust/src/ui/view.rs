@@ -66,6 +66,11 @@ pub enum Hit {
     RestartAudio,
     GetCable,
     Opt(bool),
+    /// the header's Update button
+    UpdateInstall,
+    /// Settings: Check now, and the Check for updates switch
+    UpdateCheck,
+    UpdateToggle,
     Menu(usize, usize),
     MenuBg(usize),
     Swatch(usize, usize),
@@ -353,6 +358,27 @@ impl App {
         c.card(pr, 13.0, t.bg.mix(color, 0.08), t.border.mix(color, 0.25));
         c.fill_circle(pr.x + 13.0, pr.cy(), 3.5, color);
         c.text(g, pr.x + 23.0, pr.cy() - 8.0, &text, 12.0, Weight::Semi, 0.0, 1, Align::Left, color);
+        // a newer version: one button to install it (or how far the download is)
+        match self.update.clone() {
+            UpdateState::Available(rel) => {
+                let label = format!("Update {}", rel.version);
+                let uw = self.button_width(g, &label, true, Kind::Primary);
+                self.button(c, g, pr.x - 12.0 - uw, by, uw, bh, &label, Some(Icon::Download), Kind::Primary, Hit::UpdateInstall, false);
+            }
+            UpdateState::Downloading(rel) => {
+                let pct = crate::update::work_dir().and_then(|w| crate::update::download_progress(&rel, &w));
+                let label = match pct {
+                    Some(p) => format!("Downloading {}  {p}%", rel.version),
+                    None => format!("Downloading {}…", rel.version),
+                };
+                let uw = g.measure(&label, 12.0, Weight::Semi) + 24.0;
+                let ur = Rect::new(pr.x - 12.0 - uw, pr.y, uw, pr.h);
+                c.card(ur, 13.0, t.accent_soft, t.accent_edge);
+                c.text(g, ur.x, ur.cy() - 8.0, &label, 12.0, Weight::Semi, ur.w, 1, Align::Center, t.text);
+                self.anim.keep_slow();
+            }
+            _ => {}
+        }
     }
 
     // ---------------------------------------------------------------- sidebar
@@ -1068,6 +1094,8 @@ impl App {
             h += 72.0;
         }
         h += 12.0 + 24.0 + 2.0 * 52.0 + 14.0;
+        // Updates: the version row and the switch
+        h += 12.0 + 26.0 + 2.0 * 52.0;
         let r = Rect::new(x, y, w, h);
         self.layout.panel = r;
         let pushed = c.push_opacity(alpha);
@@ -1147,6 +1175,37 @@ impl App {
                 self.hit(Rect::new(x + pad, cy - 4.0, w - 2.0 * pad, 44.0), hit);
             }
             cy += 52.0;
+        }
+        // ---- updates
+        c.fill_rect(Rect::new(x + pad, cy, w - 2.0 * pad, 1.0), t.elevated.mix(t.border, 0.8));
+        cy += 12.0;
+        c.text(g, x + pad, cy + 2.0, "UPDATES", 11.0, Weight::Semi, 0.0, 1, Align::Left, t.faint);
+        cy += 26.0;
+        let (about, col) = match &self.update {
+            _ if !self.can_update() => ("A developer build: it doesn't update itself.".to_string(), t.muted),
+            UpdateState::Idle => ("See whether a newer version is out.".to_string(), t.muted),
+            UpdateState::Checking => ("Checking…".to_string(), t.muted),
+            UpdateState::UpToDate => ("You have the newest version.".to_string(), theme::GOOD),
+            UpdateState::Available(rel) => (format!("Version {} is out. Click Update at the top to install it.", rel.version), t.accent),
+            UpdateState::Downloading(rel) => (format!("Downloading {}. It restarts by itself when ready.", rel.version), t.muted),
+            UpdateState::Failed(e) => (e.clone(), theme::WARN),
+        };
+        c.text(g, x + pad, cy, &format!("JondisBoard {}", crate::update::VERSION), 13.0, Weight::Semi, 0.0, 1, Align::Left, t.text);
+        let check_w = self.button_width(g, "Check now", false, Kind::Secondary);
+        c.text(g, x + pad, cy + 19.0, &about, 12.0, Weight::Normal, w - 2.0 * pad - check_w - 16.0, 1, Align::Left, col);
+        let hb = self.hits.len();
+        self.button(c, g, x + w - pad - check_w, cy + 1.0, check_w, CONTROL_H, "Check now", None, Kind::Secondary, Hit::UpdateCheck, false);
+        if !open || !self.can_update() {
+            self.hits.truncate(hb);
+        }
+        cy += 52.0;
+        c.text(g, x + pad, cy, "Check for updates", 13.0, Weight::Semi, 0.0, 1, Align::Left, t.text);
+        c.text(g, x + pad, cy + 19.0, "Asks GitHub for a newer version when JondisBoard starts. Nothing is installed without your click.", 12.0, Weight::Normal, w - 2.0 * pad - 60.0, 1, Align::Left, t.muted);
+        let hit = Hit::UpdateToggle;
+        let hover = self.is_hover(&hit) && open;
+        self.toggle(c, x + w - pad - 40.0, cy + 6.0, self.cfg.check_for_updates, 20, hover);
+        if open {
+            self.hit(Rect::new(x + pad, cy - 4.0, w - 2.0 * pad, 44.0), hit);
         }
         c.pop_opacity(pushed);
     }

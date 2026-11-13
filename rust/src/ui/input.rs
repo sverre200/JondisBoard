@@ -176,7 +176,7 @@ impl App {
             }
         }
         // clicking outside Settings closes it (its own button toggles it)
-        let in_panel = matches!(h, Some(Hit::Panel) | Some(Hit::Select(_)) | Some(Hit::RestartAudio) | Some(Hit::GetCable) | Some(Hit::Opt(_)) | Some(Hit::Settings));
+        let in_panel = matches!(h, Some(Hit::Panel) | Some(Hit::Select(_)) | Some(Hit::RestartAudio) | Some(Hit::GetCable) | Some(Hit::Opt(_)) | Some(Hit::UpdateCheck) | Some(Hit::UpdateToggle) | Some(Hit::Settings));
         if self.settings_open && !in_panel && !in_menu {
             self.open_settings(false);
         }
@@ -349,6 +349,13 @@ impl App {
             Hit::Select(slot) => self.device_menu(slot),
             Hit::RestartAudio => self.start_audio(),
             Hit::GetCable => shell::open("https://vb-audio.com/Cable/"),
+            Hit::UpdateInstall => self.install_update(),
+            Hit::UpdateCheck => self.check_updates(true),
+            Hit::UpdateToggle => {
+                self.cfg.check_for_updates = !self.cfg.check_for_updates;
+                self.save_config();
+                self.invalidate();
+            }
             Hit::Opt(solo) => {
                 let v = if solo { !self.cfg.solo } else { !self.cfg.toggle_stop };
                 self.set_option(solo, v);

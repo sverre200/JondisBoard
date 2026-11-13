@@ -30,11 +30,12 @@ pub const TIMER_DRAG: usize = 4;
 pub const TIMER_BENCH: usize = 5;
 pub const TIMER_SLOW: usize = 6;
 pub const TIMER_AUDIO_RETRY: usize = 7;
+pub const TIMER_UPDATE: usize = 8;
 
 const CLASS: PCWSTR = w!("JondisBoardMain");
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const MIN_W: i32 = 640;
-const MIN_H: i32 = 480;
+const MIN_H: i32 = 560;
 
 pub struct State {
     pub app: Option<App>,
@@ -271,6 +272,14 @@ pub fn close(hwnd: HWND) {
     }
 }
 
+/// Ask the window to close once the current message is done (safe from inside the app).
+pub fn post_close(hwnd: HWND) {
+    // SAFETY: posting WM_CLOSE to our own window.
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+    }
+}
+
 /// The window's data: the state behind a RefCell, because Windows calls the window procedure
 /// re-entrantly (releasing mouse capture, a modal file picker, WM_SETICON...). A nested call that
 /// finds the state already borrowed doesn't touch it: it defers what it can (`busy`).
@@ -325,6 +334,9 @@ pub fn create(paths: Paths, started: Instant, bench: Option<super::bench::Bench>
         // sound files dropped from Explorer are added like Add files
         DragAcceptFiles(hwnd, true);
         super::taskbar::follow_theme(hwnd, app.themes.get());
+        if !super::app::test_mode() {
+            set_timer(hwnd, TIMER_UPDATE, 20_000);
+        }
         app.mark("window created");
         {
             let mut st = win.state.borrow_mut();
@@ -766,6 +778,11 @@ fn handle(hwnd: HWND, st: &mut State, msg: u32, wp: WPARAM, lp: LPARAM) -> (Opti
                     TIMER_AUDIO_RETRY => {
                         kill_timer(hwnd, TIMER_AUDIO_RETRY);
                         app.probe_audio();
+                    }
+                    TIMER_UPDATE => {
+                        // 20 s after start, then every 6 hours
+                        set_timer(hwnd, TIMER_UPDATE, 6 * 60 * 60 * 1000);
+                        app.check_updates(false);
                     }
                     _ => {}
                 }

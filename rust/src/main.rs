@@ -37,9 +37,31 @@ fn main() {
         let _ = SetCurrentProcessExplicitAppUserModelID(&windows::core::HSTRING::from(APP_ID));
         let _ = OleInitialize(None);
     }
+    // started by an update: wait for the old copy to close (it gave its process id), then remove
+    // what it left behind. Every start also clears leftovers of an earlier update.
+    if let Some(pid) = arg("--updated").and_then(|p| p.parse::<u32>().ok()) {
+        wait_for_exit(pid);
+        log::info(&format!("JondisBoard {} started after an update", jondisboard::update::VERSION));
+    }
+    if let Some(work) = jondisboard::update::work_dir() {
+        jondisboard::update::cleanup(&paths.exe_dir, &work);
+    }
     let _ = std::fs::create_dir_all(paths.sounds());
     let bench = arg("--bench").map(|p| ui::bench::Bench::new(PathBuf::from(p)));
     if let Err(e) = ui::window::run(paths, started, bench) {
         log::error(&format!("the window failed: {e}"));
+    }
+}
+
+/// Wait (at most 10 s) for the process that started us to end.
+fn wait_for_exit(pid: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    // SAFETY: a handle to another process, only waited on, then closed.
+    unsafe {
+        if let Ok(h) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
+            let _ = WaitForSingleObject(h, 10_000);
+            let _ = CloseHandle(h);
+        }
     }
 }

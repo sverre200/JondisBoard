@@ -490,6 +490,41 @@ fn ui_flows() {
     app(h, |a, _| a.close_menus());
     frame(h);
 
+    // --- updates: an offer shows a button and a toast; nothing new and failures are quiet
+    {
+        use jondisboard::ui::app::UpdateState;
+        use jondisboard::update::Release;
+        let rel = Release { version: "9.9.9".into(), zip_url: "https://github.com/sverre200/JondisBoard/releases/download/v9.9.9/JondisBoard-9.9.9-win64.zip".into(), size: Some(1000) };
+        app(h, |a, _| a.update_checked(Err("offline".into()), false));
+        check("a failed timed check stays silent", app(h, |a, _| a.update == UpdateState::Idle));
+        app(h, |a, _| a.update_checked(Ok(Some(rel.clone())), false));
+        frame(h);
+        check("a newer version is offered", app(h, |a, _| a.update == UpdateState::Available(rel.clone())));
+        check("with an Update button in the header", app(h, |a, _| a.layout.button(&Hit::UpdateInstall).is_some()));
+        check("and a toast", app(h, |a, _| a.toast.as_ref().map(|t| t.text.contains("9.9.9")).unwrap_or(false)));
+        app(h, |a, _| a.update_checked(Err("offline".into()), false));
+        check("a later failed check keeps the offer", app(h, |a, _| matches!(a.update, UpdateState::Available(_))));
+        app(h, |a, _| a.update_checked(Ok(None), true));
+        frame(h);
+        check("Check now with nothing newer says so", app(h, |a, _| a.update == UpdateState::UpToDate && a.layout.button(&Hit::UpdateInstall).is_none()));
+        app(h, |a, _| a.update_checked(Err("offline".into()), true));
+        check("Check now offline explains", app(h, |a, _| matches!(&a.update, UpdateState::Failed(e) if e.contains("GitHub"))));
+        check("tests never install or check for real", app(h, |a, _| !a.can_update()));
+        // the switch
+        app(h, |a, _| a.open_settings(true));
+        frame(h);
+        let sw = app(h, |a, _| a.hits.iter().find(|(_, x)| *x == Hit::UpdateToggle).map(|(r, _)| *r).unwrap());
+        click(h, sw.right() - 20.0, sw.cy());
+        check("Check for updates can be turned off (saved)", app(h, |a, _| !a.cfg.check_for_updates && a.settings_open) && std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("\"check_for_updates\": false"));
+        click(h, sw.right() - 20.0, sw.cy());
+        check("and on again (the key is dropped)", app(h, |a, _| a.cfg.check_for_updates) && !std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("check_for_updates"));
+        app(h, |a, _| {
+            a.open_settings(false);
+            a.update = UpdateState::Idle;
+        });
+        frame(h);
+    }
+
     // --- the config keeps keys this version doesn't know
     check("unknown config keys survive", std::fs::read_to_string(lib.0.join("config.json")).unwrap().contains("unknown_key"));
 

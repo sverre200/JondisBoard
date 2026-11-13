@@ -112,6 +112,8 @@ pub struct Config {
     pub geometry: Option<String>,
     /// the group sidebar is folded to icons (only written while true)
     pub sidebar_collapsed: bool,
+    /// ask GitHub for a newer version at start (only written while false)
+    pub check_for_updates: bool,
     /// keys this version doesn't know, kept as they were
     extra: Map<String, Value>,
 }
@@ -137,6 +139,7 @@ impl Default for Config {
             theme: crate::theme::DEFAULT_THEME.into(),
             geometry: None,
             sidebar_collapsed: false,
+            check_for_updates: true,
             extra: Map::new(),
         }
     }
@@ -144,7 +147,7 @@ impl Default for Config {
 
 const KNOWN: &[&str] = &[
     "mic", "cable", "monitor", "mic_volume", "clip_volume", "monitor_volume", "mic_passthrough",
-    "hotkeys", "stop_hotkey", "group", "group_colors", "order", "solo", "toggle_stop", "sidebar_collapsed",
+    "hotkeys", "stop_hotkey", "group", "group_colors", "order", "solo", "toggle_stop", "sidebar_collapsed", "check_for_updates",
     "cookies_from_browser", "theme", "geometry",
 ];
 
@@ -204,6 +207,7 @@ impl Config {
             theme: o.get("theme").and_then(Value::as_str).map(str::to_owned).unwrap_or(d.theme),
             geometry: opt_str(o.get("geometry")),
             sidebar_collapsed: boolean(o.get("sidebar_collapsed"), d.sidebar_collapsed),
+            check_for_updates: boolean(o.get("check_for_updates"), d.check_for_updates),
             extra,
         }
     }
@@ -233,6 +237,9 @@ impl Config {
         o.insert("geometry".into(), s(&self.geometry));
         if self.sidebar_collapsed {
             o.insert("sidebar_collapsed".into(), json!(true));
+        }
+        if !self.check_for_updates {
+            o.insert("check_for_updates".into(), json!(false));
         }
         Value::Object(o)
     }
