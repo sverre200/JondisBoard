@@ -330,6 +330,34 @@ mod tests {
         }
     }
 
+    /// The real thing against GitHub (needs the internet and a published release newer than
+    /// 2.0.0): `cargo test --release --lib real_release -- --ignored --nocapture`. It installs
+    /// into a throwaway folder; nothing on this PC is replaced.
+    #[test]
+    #[ignore]
+    fn real_release_is_found_downloaded_and_swapped_in() {
+        let rel = check("2.0.0").expect("GitHub answers").expect("a release newer than 2.0.0");
+        println!("offered: {} ({:?} bytes) {}", rel.version, rel.size, rel.zip_url);
+        assert!(check("99.0.0").expect("GitHub answers").is_none(), "nothing is newer than 99.0.0");
+        let (work, install) = (temp("real_work"), temp("real_install"));
+        fs::write(install.join("JondisBoard.exe"), b"old exe").unwrap();
+        fs::write(install.join("config.json"), b"{\"mine\": true}").unwrap();
+        fs::create_dir_all(install.join("sounds")).unwrap();
+        fs::write(install.join("sounds").join("Mine.wav"), b"my sound").unwrap();
+        let staged = download(&rel, &work).expect("download and unpack");
+        apply(&staged, &install).expect("swap");
+        let exe = fs::metadata(install.join("JondisBoard.exe")).unwrap().len();
+        println!("installed JondisBoard.exe: {exe} bytes; files: {:?}", fs::read_dir(&install).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>());
+        assert!(exe > 500_000, "the real exe");
+        assert!(install.join("ffmpeg.exe").is_file() && install.join("yt-dlp.exe").is_file());
+        assert_eq!(fs::read(install.join("JondisBoard.exe.old")).unwrap(), b"old exe");
+        assert_eq!(fs::read(install.join("config.json")).unwrap(), b"{\"mine\": true}");
+        assert_eq!(fs::read(install.join("sounds").join("Mine.wav")).unwrap(), b"my sound");
+        cleanup(&install, &work);
+        assert!(!install.join("JondisBoard.exe.old").exists() && !work.exists());
+        let _ = fs::remove_dir_all(&install);
+    }
+
     #[test]
     fn dev_builds_are_recognised() {
         assert!(is_dev_install(Path::new(r"D:\Claude-Projects\JondisBoard\rust\target\release")));
